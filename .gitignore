@@ -17,3 +17,6 @@ custom_auto_synthesized.bat
 strategies/custom_auto_synthesized.bat
 bin/tg-ws-proxy.sha256
 *.zip
+
+utils/last_autosetup.json
+utils/nlm_filter.init
