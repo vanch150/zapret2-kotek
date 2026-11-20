@@ -1691,8 +1691,13 @@ $win.Add_Closing({
     }
     Stop-Z2ActiveTask $script:WatchedProc
     Dispose-Z2TrayIcon
+    try { $script:WpfApp.Shutdown() } catch {}
 })
-[void]$win.ShowDialog()
+$script:WpfApp = [System.Windows.Application]::Current
+if ($null -eq $script:WpfApp) { $script:WpfApp = New-Object System.Windows.Application }
+$script:WpfApp.ShutdownMode = [System.Windows.ShutdownMode]::OnExplicitShutdown
+$win.Show()
+[void]$script:WpfApp.Run()
 $script:CatTimer.Stop()
 Dispose-Z2TrayIcon
 Exit-Z2GuiMutex
