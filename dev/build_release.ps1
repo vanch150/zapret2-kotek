@@ -32,6 +32,8 @@ $stripPaths = @(
     'utils\.tgws_connected',
     'utils\diag_report.txt',
     'utils\strategy_scores.json',
+    'utils\last_autosetup.json',
+    'utils\nlm_filter.init',
     'utils\browser_policy.applied',
     'utils\tgws_py',
     'utils\test results',
