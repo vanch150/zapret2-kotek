@@ -1,0 +1,19 @@
+# Локальные сгенерированные файлы и логи
+bin/service.conf
+bin/tg-ws-proxy.exe
+bin/tg-ws-proxy.log
+utils/*.log
+utils/diag_report.txt
+utils/strategy_scores.json
+utils/.tgws_connected
+utils/game_filter.enabled
+utils/nlm_filter.enabled
+utils/autoupdate.mode
+utils/wf_priority.conf
+desktop.ini
+lists/list-auto.txt
+lists/ipset-all.txt.backup
+custom_auto_synthesized.bat
+strategies/custom_auto_synthesized.bat
+bin/tg-ws-proxy.sha256
+*.zip

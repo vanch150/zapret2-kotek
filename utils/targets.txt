@@ -1,0 +1,43 @@
+# Единый список целей для AUTO_SETUP, быстрого теста (Проверить) и DEEP_OPTIMIZE
+# Формат: КАТЕГОРИЯ|РЕЖИМ|URL
+#   КАТЕГОРИЯ: YT (YouTube/Google), DC (Discord), TG (Telegram), WEB (Прочие сайты)
+#   РЕЖИМ    : CORE (участвует везде: 16 целей без IP-заблокированного TG), EXT (только в DEEP_OPTIMIZE: +14 = 30 целей)
+#   Файл сохраняется при автообновлении (self_update.ps1) — можно добавлять свои URL.
+
+# --- YouTube / Google ---
+YT|CORE|https://www.youtube.com
+YT|CORE|https://i.ytimg.com/favicon.ico
+YT|CORE|https://yt3.ggpht.com
+YT|CORE|https://jnn-pa.googleapis.com
+YT|CORE|https://redirector.googlevideo.com
+YT|EXT|https://m.youtube.com
+YT|EXT|https://play.google.com
+
+# --- Discord ---
+DC|CORE|https://discord.com
+DC|CORE|https://discord.com/api/v10/gateway
+DC|CORE|https://cdn.discordapp.com
+DC|CORE|https://discord.gg
+DC|EXT|https://media.discordapp.net
+DC|EXT|https://status.discord.com
+
+# --- Telegram ---
+TG|EXT|https://web.telegram.org
+TG|EXT|https://t.me
+
+# --- Web / Cloudflare / Streaming / Gaming ---
+WEB|CORE|https://cloudflare-dns.com
+WEB|CORE|https://one.one.one.one
+WEB|CORE|https://speed.cloudflare.com/__down?bytes=65536
+WEB|CORE|https://7tv.io
+WEB|CORE|https://betterttv.net
+WEB|CORE|https://frankerfacez.com
+WEB|CORE|https://raw.githubusercontent.com
+WEB|EXT|https://github.com
+WEB|EXT|https://store.steampowered.com
+WEB|EXT|https://steamcommunity.com
+WEB|EXT|https://www.twitch.tv
+WEB|EXT|https://gql.twitch.tv
+WEB|EXT|https://soundcloud.com
+WEB|EXT|https://rutracker.org
+WEB|EXT|https://ntc.party

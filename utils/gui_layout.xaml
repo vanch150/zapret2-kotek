@@ -1,0 +1,1033 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Zapret2 Kotek — v{{VERSION}}"
+        Width="1120" Height="780" MinWidth="780" MinHeight="560"
+        WindowStartupLocation="CenterScreen"
+        Background="#121316" Foreground="#F1F3F5"
+        FontFamily="Segoe UI Variable, Segoe UI, Arial">
+
+    <Window.Resources>
+        <SolidColorBrush x:Key="AccentBrush" Color="{{ACCENT_HEX}}"/>
+        <SolidColorBrush x:Key="AccentHoverBrush" Color="{{ACCENT_HOVER_HEX}}"/>
+        <SolidColorBrush x:Key="AccentPressBrush" Color="{{ACCENT_PRESS_HEX}}"/>
+        <SolidColorBrush x:Key="AccentLightBrush" Color="{{ACCENT_LIGHT_HEX}}"/>
+        <SolidColorBrush x:Key="AccentSoftBrush" Color="{{ACCENT_SOFT_HEX}}"/>
+        <SolidColorBrush x:Key="AccentBorderBrush" Color="{{ACCENT_BORDER_HX}}"/>
+        <SolidColorBrush x:Key="AccentFgBrush" Color="{{ACCENT_FG_HEX}}"/>
+
+        <!-- Sleek Dark ToolTip (wrapped) -->
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="#1A1C21"/>
+            <Setter Property="Foreground" Value="#D4D7DD"/>
+            <Setter Property="BorderBrush" Value="#2E323B"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,7"/>
+            <Setter Property="HasDropShadow" Value="True"/>
+            <Setter Property="ContentTemplate">
+                <Setter.Value>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextWrapping="Wrap" MaxWidth="290" FontSize="14" LineHeight="17" Foreground="#F1F3F5"/>
+                    </DataTemplate>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Slim Dark ScrollBar -->
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="6"/>
+            <Setter Property="MinWidth" Value="6"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent" Margin="1,2,1,2">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border x:Name="thumbBd" Background="#2E323B" CornerRadius="3"/>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="thumbBd" Property="Background" Value="#4B5263"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Setter TargetName="thumbBd" Property="Background" Value="{StaticResource AccentBrush}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Grouped Settings Surface (clean Win11 / macOS grouped list) -->
+        <Style x:Key="GroupPanel" TargetType="Border">
+            <Setter Property="Background" Value="#1A1C21"/>
+            <Setter Property="BorderBrush" Value="#282C34"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="10"/>
+            <Setter Property="Margin" Value="0,0,0,18"/>
+        </Style>
+
+        <Style x:Key="RowDivider" TargetType="Border">
+            <Setter Property="Height" Value="1"/>
+            <Setter Property="Background" Value="#252830"/>
+            <Setter Property="Margin" Value="16,0"/>
+        </Style>
+
+        <!-- Crisp Icon Button (GitHub) -->
+        <Style x:Key="IconBtn" TargetType="Button">
+            <Setter Property="Background" Value="#202228"/>
+            <Setter Property="Foreground" Value="#D4D7DD"/>
+            <Setter Property="BorderBrush" Value="#2E323B"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="6">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#2A2E37"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#17191D"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Sidebar Navigation -->
+        <Style x:Key="NavBtn" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#9CA3AF"/>
+            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#202228"/>
+                                <Setter Property="Foreground" Value="#F1F3F5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="NavBtnActive" TargetType="Button">
+            <Setter Property="Background" Value="#22252C"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,2"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" CornerRadius="6">
+                            <Grid>
+                                <Border Width="3" Height="16" Background="{StaticResource AccentBrush}" CornerRadius="2" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="2,0,0,0"/>
+                                <ContentPresenter HorizontalAlignment="Left" VerticalAlignment="Center" Margin="14,10,12,10"/>
+                            </Grid>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Flat Modern Primary Button (cohesive Kotek mint-cyan, zero bevel) -->
+        <Style x:Key="PrimaryBtn" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource AccentBrush}"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentFgBrush}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentHoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentPressBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Flat Modern Secondary Button -->
+        <Style x:Key="SecondaryBtn" TargetType="Button">
+            <Setter Property="Background" Value="#202228"/>
+            <Setter Property="Foreground" Value="#D4D7DD"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="14,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderBrush" Value="#2B2F38"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#2B2F38"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#404654"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#17191D"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Danger Outline Button -->
+        <Style x:Key="DangerBtn" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#D97777"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="14,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderBrush" Value="#5C282C"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#2E181B"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#EF4444"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Segmented Control -->
+        <Style x:Key="SegActive" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="12,5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SegInactive" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="#9CA3AF"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="Normal"/>
+            <Setter Property="Padding" Value="12,5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="bd" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="#F1F3F5"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Dynamic Accent Toggle Switch -->
+        <Style x:Key="ToggleSwitch" TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="track" Width="42" Height="23" CornerRadius="11.5" Background="#2A2E37" BorderBrush="#383D48" BorderThickness="1">
+                            <Border x:Name="knob" Width="15" Height="15" CornerRadius="7.5" Background="#D4D7DD" HorizontalAlignment="Left" VerticalAlignment="Center" Margin="3,0,0,0"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="track" Property="Background" Value="{StaticResource AccentBrush}"/>
+                                <Setter TargetName="track" Property="BorderBrush" Value="{StaticResource AccentHoverBrush}"/>
+                                <Setter TargetName="knob" Property="HorizontalAlignment" Value="Right"/>
+                                <Setter TargetName="knob" Property="Margin" Value="0,0,3,0"/>
+                                <Setter TargetName="knob" Property="Background" Value="{StaticResource AccentFgBrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Dark Styled ComboBox for manual UDP fake selection -->
+        <Style x:Key="DarkCombo" TargetType="ComboBox">
+            <Setter Property="Foreground" Value="#F1F3F5"/>
+            <Setter Property="Background" Value="#202228"/>
+            <Setter Property="BorderBrush" Value="#2E323B"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <ToggleButton x:Name="ToggleButton" Focusable="False" IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}" ClickMode="Press" Cursor="Hand">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="cbBd" Background="#202228" BorderBrush="#2E323B" BorderThickness="1" CornerRadius="6" Padding="10,6">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="18"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="1" Text="▾" Foreground="#9CA3AF" FontSize="13" HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                                            </Grid>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="cbBd" Property="Background" Value="#2B303E"/>
+                                                <Setter TargetName="cbBd" Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter IsHitTestVisible="False" Content="{TemplateBinding SelectionBoxItem}" Margin="10,6,26,6" VerticalAlignment="Center" HorizontalAlignment="Left"/>
+                            <Popup x:Name="Popup" Placement="Bottom" IsOpen="{TemplateBinding IsDropDownOpen}" AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
+                                <Border MinWidth="{TemplateBinding ActualWidth}" MaxHeight="240" Margin="0,4,0,0" Background="#1A1C21" BorderBrush="#2E323B" BorderThickness="1" CornerRadius="8" Padding="4">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel IsItemsHost="True"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="#D4D7DD"/>
+            <Setter Property="Padding" Value="10,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="bd" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#262B37"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Clean ListBoxItem -->
+        <Style TargetType="ListBoxItem">
+            <Setter Property="Foreground" Value="#D4D7DD"/>
+            <Setter Property="Padding" Value="14,10"/>
+            <Setter Property="Margin" Value="0,1"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="#202228"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentSoftBrush}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentBorderBrush}"/>
+                                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
+                                <Setter Property="Foreground" Value="#FFFFFF"/>
+                                <Setter Property="FontWeight" Value="SemiBold"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition x:Name="ColSidebar" Width="232"/>
+            <ColumnDefinition Width="*"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- LEFT SIDEBAR (Collapsible WinUI Rail) -->
+        <Border x:Name="SideBorder" Grid.Column="0" Background="#0E0F12" BorderBrush="#202228" BorderThickness="0,0,1,0" Padding="12,18,12,14">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <StackPanel x:Name="SideHeaderPanel" Grid.Row="0" Margin="4,0,2,20">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="ColHeaderTitle" Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="TxtBrandTitle" Grid.Column="0" Text="Zapret2 Kotek" FontSize="18.5" FontWeight="Bold" Foreground="#F1F3F5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        <Button x:Name="BtnGitHub" Grid.Column="1" Style="{StaticResource IconBtn}" ToolTip="Открыть GitHub (vanch150/zapret2-kotek)" VerticalAlignment="Center" Margin="4,0,4,0">
+                            <Viewbox Width="15" Height="15">
+                                <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Data="M12,0.297 C5.37,0.297 0,5.67 0,12.297 C0,17.6 3.438,22.097 8.205,23.682 C8.805,23.795 9.025,23.424 9.025,23.105 C9.025,22.82 9.015,22.065 9.01,21.065 C5.672,21.789 4.968,19.455 4.968,19.455 C4.422,18.07 3.633,17.7 3.633,17.7 C2.546,16.956 3.717,16.971 3.717,16.971 C4.922,17.055 5.555,18.207 5.555,18.207 C6.625,20.042 8.364,19.512 9.05,19.205 C9.158,18.429 9.467,17.9 9.81,17.6 C7.145,17.3 4.344,16.268 4.344,11.67 C4.344,10.36 4.809,9.29 5.579,8.45 C5.444,8.147 5.039,6.927 5.684,5.274 C5.684,5.274 6.689,4.952 8.984,6.504 C9.944,6.237 10.964,6.105 11.984,6.099 C13.004,6.105 14.024,6.237 14.984,6.504 C17.264,4.952 18.269,5.274 18.269,5.274 C18.914,6.927 18.509,8.147 18.389,8.45 C19.154,9.29 19.619,10.36 19.619,11.67 C19.619,16.28 16.814,17.295 14.144,17.59 C14.564,17.95 14.954,18.686 14.954,19.81 C14.954,21.416 14.939,22.706 14.939,23.096 C14.939,23.411 15.149,23.786 15.764,23.666 C20.565,22.092 24,17.592 24,12.297 C24,5.67 18.627,0.297 12,0.297 Z"/>
+                            </Viewbox>
+                        </Button>
+                        <Button x:Name="BtnToggleSide" Grid.Column="2" Style="{StaticResource IconBtn}" ToolTip="Свернуть / развернуть панель" VerticalAlignment="Center" HorizontalAlignment="Center">
+                            <Path x:Name="PathToggleArrow" Width="10" Height="10" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Data="M15.41,7.41 L14,6 L8,12 L14,18 L15.41,16.59 L10.83,12 Z"/>
+                        </Button>
+                    </Grid>
+                    <TextBlock x:Name="TxtBrandVer" Text="v{{VERSION}}" FontSize="13.5" Foreground="#737A86" Margin="0,2,0,10"/>
+                    <StackPanel x:Name="PanelCatMood" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock x:Name="TxtCatArt" Text="(=^-w-^=)" FontFamily="Consolas, Segoe UI" FontSize="15" FontWeight="Bold" Foreground="{{ACCENT_HEX}}" VerticalAlignment="Center"/>
+                        <TextBlock x:Name="TxtCatMood" Text="  на страже" FontSize="14" Foreground="#737A86" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </StackPanel>
+
+                <StackPanel Grid.Row="1">
+                    <Button x:Name="BtnNavHome" Style="{StaticResource NavBtnActive}" ToolTip="Главная">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Viewbox Width="16" Height="16" VerticalAlignment="Center">
+                                <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Data="M10,20 V14 H14 V20 H19 V12 H22 L12,3 L2,12 H5 V20 Z"/>
+                            </Viewbox>
+                            <TextBlock x:Name="LblNavHome" Text="Главная" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="BtnNavStrats" Style="{StaticResource NavBtn}" ToolTip="Стратегии">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Viewbox Width="16" Height="16" VerticalAlignment="Center">
+                                <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Data="M3,17 V19 H9 V17 H3 M3,5 V7 H13 V5 H3 M13,21 V19 H21 V17 H13 V15 H11 V21 H13 M7,9 V11 H3 V13 H7 V15 H9 V9 H7 M21,13 V11 H11 V13 H21 M15,9 H17 V7 H21 V5 H17 V3 H15 V9 Z"/>
+                            </Viewbox>
+                            <TextBlock x:Name="LblNavStrats" Text="Стратегии" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="BtnNavSettings" Style="{StaticResource NavBtn}" ToolTip="Настройки">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Viewbox Width="16" Height="16" VerticalAlignment="Center">
+                                <Path Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}" Data="M19.14,12.94 C19.18,12.64 19.2,12.33 19.2,12 C19.2,11.68 19.18,11.36 19.13,11.06 L21.16,9.48 C21.34,9.34 21.39,9.07 21.28,8.87 L19.36,5.55 C19.24,5.33 18.99,5.26 18.77,5.33 L16.38,6.29 C15.88,5.91 15.35,5.59 14.76,5.35 L14.4,2.81 C14.36,2.57 14.16,2.4 13.92,2.4 H10.08 C9.84,2.4 9.65,2.57 9.61,2.81 L9.25,5.35 C8.66,5.59 8.12,5.92 7.63,6.29 L5.24,5.33 C5.02,5.25 4.77,5.33 4.65,5.55 L2.74,8.87 C2.62,9.08 2.66,9.34 2.86,9.48 L4.89,11.06 C4.84,11.36 4.8,11.69 4.8,12 C4.8,12.31 4.82,12.64 4.87,12.94 L2.84,14.52 C2.66,14.66 2.61,14.93 2.72,15.13 L4.64,18.45 C4.76,18.67 5.01,18.74 5.23,18.67 L7.62,17.71 C8.12,18.09 8.65,18.41 9.24,18.65 L9.6,21.19 C9.65,21.43 9.84,21.6 10.08,21.6 H13.92 C14.16,21.6 14.36,21.43 14.39,21.19 L14.75,18.65 C15.34,18.41 15.88,18.09 16.37,17.71 L18.76,18.67 C18.98,18.75 19.23,18.67 19.35,18.45 L21.27,15.13 C21.39,14.91 21.34,14.66 21.15,14.52 L19.14,12.94 Z M12,15.6 C10.02,15.6 8.4,13.98 8.4,12 C8.4,10.02 10.02,8.4 12,8.4 C13.98,8.4 15.6,10.02 15.6,12 C15.6,13.98 13.98,15.6 12,15.6 Z"/>
+                            </Viewbox>
+                            <TextBlock x:Name="LblNavSettings" Text="Настройки" Margin="10,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+
+                <!-- Interactive Cute Kotek Mascot in left sidebar above status -->
+                <Grid Grid.Row="2" HorizontalAlignment="Stretch" VerticalAlignment="Bottom" Margin="0,4,0,8">
+                    <Viewbox StretchDirection="DownOnly" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="2,-14,2,0" IsHitTestVisible="False">
+                        <TextBlock x:Name="TxtKotekPurr" Text="мур ♡" FontSize="14" FontWeight="SemiBold" Foreground="#D9A8B8"
+                                   HorizontalAlignment="Center" Visibility="Collapsed" IsHitTestVisible="False"/>
+                    </Viewbox>
+                    <TextBlock x:Name="TxtKotekHeart" Text="♡" FontSize="20" FontWeight="Bold" Foreground="#C98A9E"
+                               HorizontalAlignment="Center" VerticalAlignment="Top" Margin="44,6,0,0" Opacity="0" IsHitTestVisible="False">
+                        <TextBlock.RenderTransform>
+                            <TranslateTransform x:Name="HeartTranslate" X="0" Y="0"/>
+                        </TextBlock.RenderTransform>
+                    </TextBlock>
+                    <Image x:Name="ImgKotek" Width="134" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                           Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"
+                           Cursor="Hand" Opacity="0.98" ToolTipService.InitialShowDelay="300" ToolTip="ЛКМ — погладить котека · ПКМ — почесать за ушком"
+                           RenderTransformOrigin="0.5,1.0">
+                        <Image.RenderTransform>
+                            <TransformGroup>
+                                <ScaleTransform x:Name="KotekScale" ScaleX="1.0" ScaleY="1.0"/>
+                                <RotateTransform x:Name="KotekRotate" Angle="0"/>
+                                <TranslateTransform x:Name="KotekTranslate" X="0" Y="0"/>
+                            </TransformGroup>
+                        </Image.RenderTransform>
+                    </Image>
+                </Grid>
+
+                <Border x:Name="SideStatusCard" Grid.Row="3" Background="#17191D" BorderBrush="#262930" BorderThickness="1" CornerRadius="8" Padding="10,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition x:Name="ColSideStatusText" Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel x:Name="PanelSideStatusText" Grid.Column="0" VerticalAlignment="Center">
+                            <TextBlock x:Name="TxtSideState" Text="Проверка..." FontSize="14.5" FontWeight="SemiBold" Foreground="#9CA3AF"/>
+                            <TextBlock x:Name="TxtSideStrat" Text="—" FontSize="13" Foreground="#737A86" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                        </StackPanel>
+                        <Button x:Name="BtnRefresh" Grid.Column="1" Content="↻" ToolTip="Обновить статус" Style="{StaticResource SecondaryBtn}" Width="30" Height="30" Padding="0" FontSize="15"/>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Border>
+
+        <!-- RIGHT WORKSPACE -->
+        <Grid Grid.Column="1" Margin="28,22,28,16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- VIEW 1: HOME -->
+            <ScrollViewer x:Name="ViewHome" Grid.Row="0" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock Text="Главная" FontSize="22" FontWeight="SemiBold" Foreground="#F1F3F5" Margin="0,0,0,14"/>
+
+                    <!-- Prominent Active Task Banner (impossible to miss when AutoSetup / DeepTest runs) -->
+                    <Border x:Name="ActiveTaskCard" Visibility="Collapsed" Background="#17191D" BorderBrush="{StaticResource AccentBorderBrush}" BorderThickness="1" CornerRadius="8" Padding="16,14" Margin="0,0,0,16">
+                        <StackPanel>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="TxtActiveTaskTitle" Grid.Column="0" Text="Идёт автонастройка — ничего не нажимай" FontSize="16" FontWeight="Bold" Foreground="{{ACCENT_LIGHT_HEX}}" TextTrimming="CharacterEllipsis" Margin="0,0,12,0"/>
+                                <TextBlock x:Name="TxtActiveTaskEta" Grid.Column="1" Text="Подожди ~1–2 мин" FontSize="14" Foreground="#9CA3AF" VerticalAlignment="Center"/>
+                            </Grid>
+                            <ProgressBar x:Name="BarActiveTask" Height="5" IsIndeterminate="True" Margin="0,10,0,10" Background="#262930" Foreground="{StaticResource AccentBrush}" BorderThickness="0"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="TxtActiveTaskStep" Grid.Column="0" Text="Подготовка..." FontSize="14.5" Foreground="#F1F3F5" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" Margin="0,0,10,0"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"><Button x:Name="BtnCancelHybrid" Content="Оставить базовую" Visibility="Collapsed" Style="{StaticResource SecondaryBtn}" Padding="9,4" FontSize="13.5" Margin="0,0,6,0" VerticalAlignment="Center" ToolTip="Остановить сборку гибрида и оставить уже найденную базовую стратегию"/><Button x:Name="BtnCopyTaskLog" Content="Копировать" Visibility="Collapsed" Style="{StaticResource SecondaryBtn}" Padding="9,4" FontSize="13.5" Margin="0,0,6,0" VerticalAlignment="Center" ToolTip="Скопировать полный лог в буфер обмена"/><Button x:Name="BtnToggleTaskLog" Content="Лог ▾" Style="{StaticResource SecondaryBtn}" Padding="10,4" FontSize="13.5" VerticalAlignment="Center" ToolTip="Показать или скрыть подробный консольный вывод теста"/></StackPanel>
+                            </Grid>
+                            <Border x:Name="TaskLogBorder" Visibility="Collapsed" Background="#0E0F12" BorderBrush="#262930" BorderThickness="1" CornerRadius="6" Margin="0,10,0,0" Padding="10,8">
+                                <TextBox x:Name="TxtTaskLogBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" Background="Transparent" BorderThickness="0" Foreground="#C8CFCB" FontFamily="Consolas, Cascadia Mono, Courier New" FontSize="13.5" Height="185" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"/>
+                            </Border>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Friendly Completion Summary Card after Auto-Setup -->
+                    <Border x:Name="AutoDoneCard" Visibility="Collapsed" Background="#17191D" BorderBrush="{{ACCENT_BORDER_HX}}" BorderThickness="1.5" CornerRadius="8" Padding="18,15" Margin="0,0,0,16">
+                        <StackPanel>
+                            <TextBlock x:Name="TxtAutoDoneTitle" Text="✓  Котек всё настроил — можно пользоваться!" FontSize="17" FontWeight="Bold" Foreground="{{ACCENT_LIGHT_HEX}}"/>
+                            <TextBlock x:Name="TxtAutoDoneSummary" Text="" FontSize="14.5" Foreground="#F1F3F5" Margin="0,7,0,0" TextWrapping="Wrap"/>
+                            <TextBlock x:Name="TxtAutoDoneHints" Text="• Вкладка «Стратегии» — ручной выбор, быстрая проверка и синтез гибрида&#10;• Вкладка «Настройки» — авто-хостлист, WARP, UDP-фейк, обновления и удаление&#10;• Обход работает в фоне сам — это окно можно спокойно закрыть" FontSize="14" Foreground="#9CA3AF" Margin="0,8,0,12" LineHeight="19" TextWrapping="Wrap"/>
+                            <WrapPanel Orientation="Horizontal">
+                                <Button x:Name="BtnAutoDoneDeep" Content="Собрать гибрид под свой ПК (Важно!)" Style="{StaticResource PrimaryBtn}" Margin="0,0,8,6" ToolTipService.InitialShowDelay="150" ToolTip="Прогнать все 22 стратегии по 30 целям и собрать гибрид под твоего провайдера"/>
+                                <Button x:Name="BtnAutoDoneClose" Content="Закрыть окно" Style="{StaticResource SecondaryBtn}" Margin="0,0,8,6"/>
+                                <Button x:Name="BtnAutoDoneStay" Content="Остаться в меню" Style="{StaticResource SecondaryBtn}" Margin="0,0,8,6"/>
+                                <Button x:Name="BtnAutoDoneAutoUpd" Content="● Автообновление: ВКЛ" Style="{StaticResource SecondaryBtn}" Foreground="{{ACCENT_LIGHT_HEX}}" BorderBrush="{{ACCENT_BORDER_HX}}" Margin="0,0,0,6" ToolTipService.InitialShowDelay="150" ToolTip="Нажми, чтобы включить или выключить фоновое автообновление с GitHub"/>
+                            </WrapPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Hero Status Panel -->
+                    <Border Style="{StaticResource GroupPanel}" Padding="18,16">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock x:Name="TxtZapretState" Text="Проверка..." FontSize="19" FontWeight="Bold" Foreground="{{ACCENT_LIGHT_HEX}}"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,2" VerticalAlignment="Center">
+                                    <TextBlock Text="Стратегия:" FontSize="14.5" Foreground="#9CA3AF" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                    <ComboBox x:Name="CmbQuickStrat" Style="{StaticResource DarkCombo}" Width="244" FontSize="14.5" VerticalAlignment="Center" ToolTip="Быстрый выбор активной стратегии"/>
+                                </StackPanel>
+                                <TextBlock x:Name="TxtActiveStrat" Text="" Visibility="Collapsed"/>
+                                <TextBlock x:Name="TxtHeroMeta" Text="IPSet: —  ·  UDP: —" FontSize="14" Foreground="#737A86" Margin="0,4,0,0" TextTrimming="CharacterEllipsis"/>
+                            </StackPanel>
+                            <Button x:Name="BtnPause" Grid.Column="1" Content="Пауза" Style="{StaticResource SecondaryBtn}" MinWidth="112" VerticalAlignment="Center" Margin="14,0,0,0"/>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Text="Подбор обхода" FontSize="14" FontWeight="SemiBold" Foreground="#737A86" Margin="2,0,0,8"/>
+
+                    <!-- Two side-by-side equal-height setup cards (Fast Start vs Personal Hybrid) -->
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="12"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Card 1: Fast 1-Click Setup -->
+                        <Border Grid.Column="0" Style="{StaticResource GroupPanel}" Padding="18,16" Margin="0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Быстрая настройка" FontSize="16.5" FontWeight="SemiBold" Foreground="#F1F3F5" VerticalAlignment="Center"/>
+                                    <Border Background="#202228" BorderBrush="#2E323B" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="~1–2 мин" FontSize="12.5" FontWeight="SemiBold" Foreground="#9CA3AF"/>
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock Grid.Row="1" Text="Подберёт рабочую стратегию под твоего провайдера, запустит службы и подключит Telegram." FontSize="14.5" Foreground="#9CA3AF" LineHeight="18" Margin="0,8,0,14" TextWrapping="Wrap"/>
+                                <Button x:Name="BtnAutoSetup" Grid.Row="2" Content="Настроить быстро" Style="{StaticResource PrimaryBtn}" HorizontalAlignment="Stretch" Padding="14,9"/>
+                            </Grid>
+                        </Border>
+
+                        <!-- Card 2: Personal Hybrid Builder -->
+                        <Border Grid.Column="2" Style="{StaticResource GroupPanel}" BorderBrush="{StaticResource AccentBorderBrush}" Padding="18,16" Margin="0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <StackPanel Grid.Row="0" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Персональный гибрид" FontSize="16.5" FontWeight="SemiBold" Foreground="#F1F3F5" VerticalAlignment="Center"/>
+                                    <Border Background="#1A1D24" BorderBrush="#2F3542" BorderThickness="1" CornerRadius="4" Padding="6,2" Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="Максимум" FontSize="12.5" FontWeight="SemiBold" Foreground="{{ACCENT_LIGHT_HEX}}"/>
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock Grid.Row="1" Text="Проверит все 22 стратегии по 30 целям и склеит лучший конфиг под твой ПК (YouTube + Discord + Web)." FontSize="14.5" Foreground="#9CA3AF" LineHeight="18" Margin="0,8,0,14" TextWrapping="Wrap"/>
+                                <Button x:Name="BtnDeepOpt" Grid.Row="2" Content="Собрать под себя" Style="{StaticResource SecondaryBtn}" BorderBrush="{StaticResource AccentBorderBrush}" HorizontalAlignment="Stretch" Padding="14,9"/>
+                            </Grid>
+                        </Border>
+                    </Grid>
+
+                    <TextBlock Text="Telegram" FontSize="14" FontWeight="SemiBold" Foreground="#737A86" Margin="2,0,0,8"/>
+
+                    <Border Style="{StaticResource GroupPanel}">
+                        <Grid Margin="16,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                    <TextBlock Text="Telegram Proxy" FontSize="16" FontWeight="SemiBold" Foreground="#F1F3F5" VerticalAlignment="Center"/>
+                                    <Border Background="#202228" BorderBrush="#2E323B" BorderThickness="1" CornerRadius="8" Width="18" Height="18" Margin="7,0,0,0" VerticalAlignment="Center" Cursor="Help" ToolTipService.InitialShowDelay="100" ToolTipService.ShowDuration="15000" ToolTip="Режимы работы Telegram Proxy:&#10;• smart (авто) — рекомендуемый: сначала пробует напрямую к Telegram, при блокировке мгновенно переключается на Cloudflare.&#10;• direct (прямой) — только прямое WebSocket-соединение с серверами Telegram (минимальный пинг, если провайдер не режет IP Telegram).&#10;• cfonly (CF) — всегда через пул чистых IP Cloudflare (если прямые IP Telegram наглухо заблокированы).">
+                                        <TextBlock Text="?" FontSize="11" FontWeight="Bold" Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </StackPanel>
+                                <TextBlock x:Name="TxtTgStatusLine" Text="Проверка..." FontSize="14" Foreground="#9CA3AF" Margin="0,3,14,0"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <ComboBox x:Name="CmbTgMode" Style="{StaticResource DarkCombo}" Width="142" FontSize="14" Margin="0,0,8,0" VerticalAlignment="Center" ToolTipService.InitialShowDelay="150" ToolTipService.ShowDuration="15000" ToolTip="smart (авто) — сначала напрямую к Telegram, при блокировке мгновенно через Cloudflare&#10;direct (прямой) — только прямое WebSocket-подключение без Cloudflare&#10;cfonly (Cloudflare) — всегда через пул чистых IP Cloudflare"/>
+                                <Button x:Name="BtnTgToggle" Content="Выключить" Style="{StaticResource SecondaryBtn}" MinWidth="96" Margin="0,0,8,0" VerticalAlignment="Center" ToolTip="Включить или остановить фоновую службу Telegram Proxy"/>
+                                <Button x:Name="BtnTgConnect" Content="Подключить" Style="{StaticResource SecondaryBtn}" MinWidth="106" VerticalAlignment="Center" ToolTip="Открыть tg://proxy в Telegram Desktop"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+
+                    <TextBlock Text="Полезные инструменты" FontSize="14" FontWeight="SemiBold" Foreground="#737A86" Margin="2,4,0,8"/>
+
+                    <Border Style="{StaticResource GroupPanel}">
+                        <StackPanel>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="Фикс браузера (отключить QUIC + включить DoH)" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5" VerticalAlignment="Center"/><Border Background="{{ACCENT_SOFT_HEX}}" BorderBrush="{{ACCENT_BORDER_HX}}" BorderThickness="1" CornerRadius="4" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center"><TextBlock Text="Важно!" FontSize="12.5" FontWeight="SemiBold" Foreground="{{ACCENT_LIGHT_HEX}}"/></Border></StackPanel>
+                                    <TextBlock x:Name="TxtBrowserFixState" Text="Помогает, если YouTube тормозит в Chrome / Edge / Яндекс.Браузере" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="BtnBrowserFix" Content="Применить" Style="{StaticResource SecondaryBtn}" Padding="11,7" Margin="0,0,6,0"/>
+                                    <Button x:Name="BtnBrowserRevert" Content="Откатить" Style="{StaticResource SecondaryBtn}" Padding="11,7"/>
+                                </StackPanel>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <Grid Grid.Row="0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="UDP-фейк для голоса Discord и игр" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5"/>
+                                        <TextBlock Text="Выбери вручную из всех UDP-файлов в bin\ или запусти автоподбор (топ-11)" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                    <Button x:Name="BtnUdpOpt" Grid.Column="1" Content="Автоподбор" Style="{StaticResource SecondaryBtn}" MinWidth="106" VerticalAlignment="Center"/>
+                                </Grid>
+                                <ComboBox x:Name="CmbUdpFake" Grid.Row="1" Style="{StaticResource DarkCombo}" Margin="0,10,0,0"/>
+                            </Grid>
+
+                        </StackPanel>
+                    </Border>
+
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- VIEW 2: STRATEGIES -->
+            <Grid x:Name="ViewStrats" Grid.Row="0" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0" Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Text="Стратегии обхода" FontSize="22" FontWeight="SemiBold" Foreground="#F1F3F5" VerticalAlignment="Center"/>
+                    <Border Grid.Column="1" Background="#0E0F12" BorderBrush="#262930" BorderThickness="1" CornerRadius="8" Padding="3">
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="BtnTabCore" Content="Базовые (9)" Style="{StaticResource SegActive}" Margin="0,0,2,0"/>
+                            <Button x:Name="BtnTabArch" Content="Дополнительные (10)" Style="{StaticResource SegInactive}"/>
+                        </StackPanel>
+                    </Border>
+                </Grid>
+
+                <Border Grid.Row="1" Background="#1A1C21" BorderBrush="#262930" BorderThickness="1" CornerRadius="8" Padding="6">
+                    <ListBox x:Name="ListStrategies"
+                             Background="Transparent" Foreground="#F1F3F5"
+                             BorderThickness="0" FontSize="15.5"
+                             HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="2,1" ToolTip="{Binding ScoreTip}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="{Binding Name}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Grid.Column="1" Text="{Binding BreakdownText}" Foreground="#9CA3AF" FontSize="13.5" VerticalAlignment="Center" Margin="10,0,10,0"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding ScoreText}" Foreground="{Binding ScoreBrush}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Border>
+
+                <Grid Grid.Row="2" Margin="0,12,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="BtnAddStrat" Content="+ Добавить" Style="{StaticResource SecondaryBtn}" Padding="10,7" Margin="0,0,6,0" ToolTip="Добавить свой .bat конфиг в папку сборки"/>
+                        <Button x:Name="BtnSynthStrat" Content="Собрать гибрид" Style="{StaticResource SecondaryBtn}" Padding="12,7" ToolTip="Прогнать все 22 стратегии по 30 целям и собрать гибрид custom_auto_synthesized.bat"/>
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="BtnProbeStrat" Content="Проверить" Style="{StaticResource SecondaryBtn}" Padding="12,7" Margin="0,0,8,0" ToolTip="Быстрый тест только выбранной стратегии по 18 целям"/>
+                        <Button x:Name="BtnApplyStrat" Content="Установить" Style="{StaticResource PrimaryBtn}" Padding="14,7"/>
+                    </StackPanel>
+                </Grid>
+            </Grid>
+
+            <!-- VIEW 3: SETTINGS & TOOLS -->
+            <ScrollViewer x:Name="ViewSettings" Grid.Row="0" Visibility="Collapsed" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock Text="Настройки и инструменты" FontSize="22" FontWeight="SemiBold" Foreground="#F1F3F5" Margin="0,0,0,16"/>
+
+                    <TextBlock Text="Параметры обхода (применяются сразу)" FontSize="14" FontWeight="SemiBold" Foreground="#737A86" Margin="4,0,0,8"/>
+
+                    <Border Style="{StaticResource GroupPanel}">
+                        <StackPanel>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="Авто-поиск заблокированных сайтов" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5" VerticalAlignment="Center"/><Border Background="{{ACCENT_SOFT_HEX}}" BorderBrush="{{ACCENT_BORDER_HX}}" BorderThickness="1" CornerRadius="4" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center"><TextBlock Text="Рекомендуется" FontSize="12.5" FontWeight="SemiBold" Foreground="{{ACCENT_LIGHT_HEX}}"/></Border><Border Width="16" Height="16" CornerRadius="8" Background="#202228" BorderBrush="#2E323B" BorderThickness="1" Margin="6,0,0,0" VerticalAlignment="Center" Cursor="Help" ToolTipService.InitialShowDelay="120" ToolTip="Если сайт не открывается или сбрасывает соединение, winws2 сам добавляет его в lists\list-auto.txt и применяет обход. Посмотреть или очистить найденные домены можно в «Свои списки → Авто-найденные»."><TextBlock Text="i" FontSize="10.5" FontWeight="Bold" Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/></Border></StackPanel>
+                                    <TextBlock Text="Автоматически добавляет недоступные домены в --hostlist-auto" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0"/>
+                                </StackPanel>
+                                <CheckBox x:Name="ChkAutoHost" Grid.Column="1" Style="{StaticResource ToggleSwitch}" ToolTipService.InitialShowDelay="150" ToolTip="Если сайт не открывается или сбрасывает соединение, winws2 сам добавляет его в lists\list-auto.txt и применяет обход. Посмотреть или очистить найденные домены можно в «Свои списки → Авто-найденные»."/>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="Разблокировка Cloudflare WARP" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5" VerticalAlignment="Center"/><Border Background="{{ACCENT_SOFT_HEX}}" BorderBrush="{{ACCENT_BORDER_HX}}" BorderThickness="1" CornerRadius="4" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center"><TextBlock Text="Рекомендуется" FontSize="12.5" FontWeight="SemiBold" Foreground="{{ACCENT_LIGHT_HEX}}"/></Border><Border Width="16" Height="16" CornerRadius="8" Background="#202228" BorderBrush="#2E323B" BorderThickness="1" Margin="6,0,0,0" VerticalAlignment="Center" Cursor="Help" ToolTipService.InitialShowDelay="120" ToolTip="Включает обход на UDP-портах 500, 1701, 2408 и 4500, чтобы приложение Cloudflare WARP (1.1.1.1) подключалось без вечной загрузки. Обычному интернету не мешает."><TextBlock Text="i" FontSize="10.5" FontWeight="Bold" Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/></Border></StackPanel>
+                                    <TextBlock Text="Поддерживает обход для подключения к серверам WARP" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0"/>
+                                </StackPanel>
+                                <CheckBox x:Name="ChkWarp" Grid.Column="1" Style="{StaticResource ToggleSwitch}" ToolTipService.InitialShowDelay="150" ToolTip="Включает обход на UDP-портах 500, 1701, 2408 и 4500, чтобы приложение Cloudflare WARP (1.1.1.1) подключалось без вечной загрузки. Обычному интернету не мешает."/>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="Игровой фильтр (GameFilter)" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5" VerticalAlignment="Center"/><Border Background="#202926" BorderBrush="#2E323B" BorderThickness="1" CornerRadius="4" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center"><TextBlock Text="Опционально" FontSize="12.5" FontWeight="SemiBold" Foreground="#9CA3AF"/></Border><Border Width="16" Height="16" CornerRadius="8" Background="#202228" BorderBrush="#2E323B" BorderThickness="1" Margin="6,0,0,0" VerticalAlignment="Center" Cursor="Help" ToolTipService.InitialShowDelay="120" ToolTip="Расширяет обход на диапазон портов 1024–65535 (по ipset-all.txt). Включай только если не подключаются онлайн-игры (Valorant, Roblox, Apex и др.) — на торрентах и P2P может давать лишнюю нагрузку."><TextBlock Text="i" FontSize="10.5" FontWeight="Bold" Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/></Border></StackPanel>
+                                    <TextBlock Text="Расширяет обход на порты онлайн-игр (1024–65535)" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0"/>
+                                </StackPanel>
+                                <CheckBox x:Name="ChkGameFilter" Grid.Column="1" Style="{StaticResource ToggleSwitch}" ToolTipService.InitialShowDelay="150" ToolTip="Расширяет обход на диапазон портов 1024–65535 (по ipset-all.txt). Включай только если не подключаются онлайн-игры (Valorant, Roblox, Apex и др.) — на торрентах и P2P может давать лишнюю нагрузку."/>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="Авто-исключение VPN (NLM)" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5" VerticalAlignment="Center"/><Border Background="{{ACCENT_SOFT_HEX}}" BorderBrush="{{ACCENT_BORDER_HX}}" BorderThickness="1" CornerRadius="4" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center"><TextBlock Text="Рекомендуется" FontSize="12.5" FontWeight="SemiBold" Foreground="{{ACCENT_LIGHT_HEX}}"/></Border><Border Width="16" Height="16" CornerRadius="8" Background="#202228" BorderBrush="#2E323B" BorderThickness="1" Margin="6,0,0,0" VerticalAlignment="Center" Cursor="Help" ToolTipService.InitialShowDelay="120" ToolTip="Исключает выбранные VPN-адаптеры через --nlm-filter-neg=1, чтобы Zapret не конфликтовал с WireGuard, AmneziaWG и другими VPN. Новые Wi-Fi и USB-модемы продолжают работать сами. Нажми «Настроить», чтобы выбрать VPN по отдельности (например, оставить ExitLag через обход)."><TextBlock Text="i" FontSize="10.5" FontWeight="Bold" Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/></Border></StackPanel>
+                                    <TextBlock x:Name="TxtNlmStatus" Text="Исключает выбранные VPN-адаптеры (WireGuard / Amnezia), позволяя гнать ExitLag через обход" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="BtnNlmConfig" Content="Настроить" Style="{StaticResource SecondaryBtn}" Padding="10,5" FontSize="13.5" Margin="0,0,10,0" ToolTip="Выбрать по отдельности, какие VPN исключить, а какие (например ExitLag) гнать через Zapret"/>
+                                    <CheckBox x:Name="ChkNlmVpn" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center" ToolTipService.InitialShowDelay="150" ToolTip="Исключает выбранные VPN-адаптеры через --nlm-filter-neg=1, чтобы Zapret не конфликтовал с WireGuard, AmneziaWG и другими VPN. Новые Wi-Fi и USB-модемы продолжают работать сами. Нажми «Настроить», чтобы выбрать VPN по отдельности (например, оставить ExitLag через обход)."/>
+                                </StackPanel>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="Ядерная фильтрация UDP (WinDivert)" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5" VerticalAlignment="Center"/><Border Background="{{ACCENT_SOFT_HEX}}" BorderBrush="{{ACCENT_BORDER_HX}}" BorderThickness="1" CornerRadius="4" Padding="6,1" Margin="8,0,0,0" VerticalAlignment="Center"><TextBlock Text="Рекомендуется" FontSize="12.5" FontWeight="SemiBold" Foreground="{{ACCENT_LIGHT_HEX}}"/></Border><Border Width="16" Height="16" CornerRadius="8" Background="#202228" BorderBrush="#2E323B" BorderThickness="1" Margin="6,0,0,0" VerticalAlignment="Center" Cursor="Help" ToolTipService.InitialShowDelay="120" ToolTip="Использует официальные фильтры windivert_part из zapret2 v1.0.7: лишние UDP-пакеты отсекаются прямо в драйвере, не нагружая процессор. Делает пинг в играх и голосе Discord стабильнее."><TextBlock Text="i" FontSize="10.5" FontWeight="Bold" Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/></Border></StackPanel>
+                                    <TextBlock Text="Отсекает лишние UDP-пакеты в драйвере — меньше нагрузка на CPU и стабильнее пинг в играх и Discord" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <CheckBox x:Name="ChkKernelFilter" Grid.Column="1" Style="{StaticResource ToggleSwitch}" ToolTipService.InitialShowDelay="150" ToolTip="Использует официальные фильтры windivert_part из zapret2 v1.0.7: лишние UDP-пакеты отсекаются прямо в драйвере, не нагружая процессор. Делает пинг в играх и голосе Discord стабильнее."/>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal"><TextBlock Text="Сворачивать в трей при закрытии" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5" VerticalAlignment="Center"/><Border Width="16" Height="16" CornerRadius="8" Background="#202228" BorderBrush="#2E323B" BorderThickness="1" Margin="6,0,0,0" VerticalAlignment="Center" Cursor="Help" ToolTipService.InitialShowDelay="120" ToolTip="Если выключено (по умолчанию) — при нажатии на крестик окно закрывается полностью, а обход продолжает тихо работать фоновой службой. Если включено — иконка Котека остаётся возле часов для быстрого доступа."><TextBlock Text="i" FontSize="10.5" FontWeight="Bold" Foreground="#9CA3AF" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,-1,0,0"/></Border></StackPanel>
+                                    <TextBlock Text="Показывает иконку Котека возле часов вместо полного закрытия окна (по умолчанию выключено)" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <CheckBox x:Name="ChkTrayMode" Grid.Column="1" Style="{StaticResource ToggleSwitch}" ToolTipService.InitialShowDelay="150" ToolTip="Если выключено (по умолчанию) — при нажатии на крестик окно закрывается полностью, а обход продолжает тихо работать фоновой службой. Если включено — иконка Котека остаётся возле часов для быстрого доступа."/>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Инструменты" FontSize="14" FontWeight="SemiBold" Foreground="#737A86" Margin="4,0,0,8"/>
+
+                    <Border Style="{StaticResource GroupPanel}">
+                        <StackPanel>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Диагностика подключения" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5"/>
+                                    <TextBlock Text="Соберёт отчёт о службах и скопирует его в буфер обмена" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0"/>
+                                </StackPanel>
+                                <Button x:Name="BtnDiag" Grid.Column="1" Content="Проверить" Style="{StaticResource SecondaryBtn}" MinWidth="106" VerticalAlignment="Center"/>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Папка программы" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5"/>
+                                    <TextBlock x:Name="TxtFolder" Text="—" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="BtnCreateShortcut" Content="Ярлык" Style="{StaticResource SecondaryBtn}" Padding="11,7" Margin="0,0,6,0" ToolTipService.InitialShowDelay="150" ToolTip="Создать ярлык Zapret2 Kotek на Рабочем столе и в меню Пуск"/>
+                                    <Button x:Name="BtnOpenDir" Content="Открыть" Style="{StaticResource SecondaryBtn}" Padding="11,7"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Свои списки сайтов и исключений" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5"/>
+                                    <TextBlock Text="Добавить сайты в обход или в исключения в 1 клик (с очисткой ссылок)" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="BtnEditGenUser" Content="Свои сайты" Style="{StaticResource SecondaryBtn}" Padding="11,7" Margin="0,0,6,0" ToolTipService.InitialShowDelay="150" ToolTip="Открыть редактор списка сайтов для обхода (list-general-user.txt)"/>
+                                    <Button x:Name="BtnEditExUser" Content="Исключения" Style="{StaticResource SecondaryBtn}" Padding="11,7"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Обновления" FontSize="14" FontWeight="SemiBold" Foreground="#737A86" Margin="4,0,0,8"/>
+
+                    <Border Style="{StaticResource GroupPanel}">
+                        <StackPanel>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Режим фильтра IPSet" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5"/>
+                                    <TextBlock Text="loaded — список IP, none — только домены + авто-хостлист, any — весь трафик" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <ComboBox x:Name="CmbIpsetMode" Grid.Column="1" Style="{StaticResource DarkCombo}" Width="192" FontSize="14" VerticalAlignment="Center" ToolTipService.InitialShowDelay="150" ToolTip="loaded — стандартная база подсетей&#10;none — обход только по доменам (экономит ресурсы с Авто-хостлистом)&#10;any — применять ко всем IP"/>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Списки сайтов и IP (IPSet + Hosts)" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5"/>
+                                    <TextBlock Text="Загрузит свежую базу подсетей и доменов, перезапустит службу" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0"/>
+                                </StackPanel>
+                                <Button x:Name="BtnUpdateLists" Grid.Column="1" Content="Обновить" Style="{StaticResource SecondaryBtn}" MinWidth="106" VerticalAlignment="Center"/>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Обновления Zapret2 Kotek (GitHub)" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5"/>
+                                    <TextBlock x:Name="TxtUpdateInfo" Text="Текущая версия: v{{VERSION}}" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <Button x:Name="BtnCheckUpdate" Grid.Column="1" Content="Проверить" Style="{StaticResource SecondaryBtn}" MinWidth="106" VerticalAlignment="Center"/>
+                            </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Автообновление (релизы и списки)" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5"/>
+                                    <TextBlock x:Name="TxtAutoUpdDesc" Text="Тихо обновляет Zapret2 Kotek без нагрузки в фоне" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <ComboBox x:Name="CmbAutoUpdMode" Style="{StaticResource DarkCombo}" Width="186" FontSize="14" Margin="0,0,10,0" VerticalAlignment="Center" ToolTipService.InitialShowDelay="150" ToolTip="1 раз в неделю — по воскресеньям в простое ПК&#10;2 раза в неделю — по средам и воскресеньям в простое&#10;1 раз в месяц — раз в 30 дней в простое&#10;При включении ПК — через 2 минуты после старта Windows"/>
+                                    <CheckBox x:Name="ChkAutoUpdate" Style="{StaticResource ToggleSwitch}" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock Text="Удаление" FontSize="14" FontWeight="SemiBold" Foreground="#737A86" Margin="4,0,0,8"/>
+
+                    <Border Style="{StaticResource GroupPanel}" Margin="0">
+                        <Grid Margin="16,13">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                <TextBlock Text="Удалить Zapret2 Kotek из системы" FontSize="15.5" FontWeight="Medium" Foreground="#FCA5A5"/>
+                                <TextBlock Text="Остановит и удалит службы обхода, прокси и драйвер WinDivert" FontSize="14" Foreground="#9CA3AF" Margin="0,2,12,0"/>
+                            </StackPanel>
+                            <Button x:Name="BtnUninstall" Grid.Column="1" Content="Удалить" Style="{StaticResource DangerBtn}" MinWidth="106" VerticalAlignment="Center"/>
+                        </Grid>
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Status Strip + Silent Progress + Completion Toast -->
+            <StackPanel Grid.Row="1" Margin="0,10,0,0">
+                <Border x:Name="ToastBanner" Visibility="Collapsed" Background="#162822" BorderBrush="{{ACCENT_BORDER_HX}}" BorderThickness="1" CornerRadius="8" Padding="12,8" Margin="0,0,0,8">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="TxtToastMsg" Grid.Column="0" Text="" FontSize="14.5" FontWeight="SemiBold" Foreground="#F1F3F5" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                        <Button x:Name="BtnCloseToast" Grid.Column="1" Content="✕" Background="Transparent" BorderThickness="0" Foreground="#9CA3AF" FontSize="14" Padding="6,0,0,0" Cursor="Hand" VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+                <Border x:Name="StatusRow" BorderBrush="#202228" BorderThickness="0,1,0,0" Padding="2,8,2,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="TxtStatusBar" Grid.Column="0" Text="Готово к работе." FontSize="14" Foreground="#737A86" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                        <ProgressBar x:Name="BarProgress" Grid.Column="1" Width="118" Height="6" IsIndeterminate="True" Visibility="Collapsed" Margin="12,0,0,0" Background="#1F242D" Foreground="{StaticResource AccentBrush}" BorderThickness="0" VerticalAlignment="Center"/>
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>
