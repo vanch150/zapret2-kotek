@@ -38,3 +38,6 @@ utils/telemetry.enabled
 utils/telemetry.id
 utils/telemetry.state.json
 utils/telemetry.prompted
+
+# Локальные скрипты разработчика, планы и контекст ИИ
+dev/
