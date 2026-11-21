@@ -1,22 +1,22 @@
-&lt;div align=&quot;center&quot;&gt;
+<div align="center">
 
-&lt;img src=&quot;utils/kotek_happy.png&quot; width=&quot;108&quot; alt=&quot;Котек — маскот Zapret2 Kotek&quot; /&gt;
+<img src="utils/kotek_happy.png" width="108" alt="Котек — маскот Zapret2 Kotek" />
 
 # Zapret2 Kotek
 
 Удобная программа для Windows, которая возвращает доступ к YouTube, Discord, Telegram и популярным ИИ-сервисам без стороннего VPN и замедления остального интернета. Настраивается за один клик, а дальше тихо работает в фоне — окно можно закрыть, и после перезагрузки ПК всё запустится само.
 
-[Скачать v1.1.0 (Windows 10 / 11)](https://www.google.com/search?q=https://github.com/vanch150/zapret2-kotek/releases/latest) · [Быстрый старт](#быстрый-старт) · [Возможности](#что-умеет-котек) · [Частые вопросы](#частые-вопросы) · [Для продвинутых](#для-продвинутых)
+[**Скачать v1.1.0 (Windows 10 / 11)**](https://github.com/vanch150/zapret2-kotek/releases/latest) · [Быстрый старт](#быстрый-старт) · [Возможности](#что-умеет-котек) · [Частые вопросы](#частые-вопросы) · [Для продвинутых](#для-продвинутых)
 
-&lt;/div&gt;
+</div>
 
-&lt;p align=&quot;center&quot;&gt;
-&lt;img src=&quot;docs/screenshots/home.png&quot; width=&quot;880&quot; alt=&quot;Главное окно Zapret2 Kotek&quot; /&gt;
-&lt;/p&gt;
+<p align="center">
+<img src="docs/screenshots/home.png" width="880" alt="Главное окно Zapret2 Kotek" />
+</p>
 
 ## Быстрый старт
 
-1. **Скачайте и распакуйте архив** `zapret2-kotek-v1.1.0.zip` из раздела [Releases](https://www.google.com/search?q=https://github.com/vanch150/zapret2-kotek/releases/latest) в папку без русских букв и пробелов (например, `C:\Zapret2`). Если запустить из «Загрузок», Котек сам предложит перенести сборку в подходящую папку.
+1. **Скачайте и распакуйте архив** `zapret2-kotek-v1.1.0.zip` из раздела [Releases](https://github.com/vanch150/zapret2-kotek/releases/latest) в папку без русских букв и пробелов (например, `C:\Zapret2`). Если запустить из «Загрузок», Котек сам предложит перенести сборку в подходящую папку.
 2. **Запустите `!_START_KOTEK.bat`** — подтвердите запрос прав администратора, и откроется главное окно.
 3. **Нажмите «Настроить быстро»** (автонастройка в 1 клик) — за 1–2 минуты Котек сам подберёт рабочий режим под вашего провайдера и запустит фоновые службы. Если нужен Telegram, нажмите **«Подключить»** в блоке **Telegram Proxy**, чтобы применить готовое подключение в Telegram Desktop.
 
@@ -34,15 +34,15 @@
 
 На вкладке **«Стратегии»** видно наглядный рейтинг всех стратегий по результатам проверки — любую можно протестировать отдельно, переключить вручную или добавить свой `.bat`.
 
-&lt;p align=&quot;center&quot;&gt;
-&lt;img src=&quot;docs/screenshots/strategies.png&quot; width=&quot;880&quot; alt=&quot;Вкладка Стратегии в Zapret2 Kotek&quot; /&gt;
-&lt;/p&gt;
+<p align="center">
+<img src="docs/screenshots/strategies.png" width="880" alt="Вкладка Стратегии в Zapret2 Kotek" />
+</p>
 
 На вкладке **«Настройки»** все переключатели применяются сразу: автопоиск заблокированных сайтов, обход для Cloudflare WARP, игровой фильтр, исключения VPN, сворачивание в трей, свои списки сайтов и расписание автообновлений.
 
-&lt;p align=&quot;center&quot;&gt;
-&lt;img src=&quot;docs/screenshots/settings.png&quot; width=&quot;880&quot; alt=&quot;Вкладка Настройки в Zapret2 Kotek&quot; /&gt;
-&lt;/p&gt;
+<p align="center">
+<img src="docs/screenshots/settings.png" width="880" alt="Вкладка Настройки в Zapret2 Kotek" />
+</p>
 
 ## Частые вопросы
 
@@ -67,8 +67,8 @@
 
 ## Для продвинутых
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Как это работает под капотом (winws2.exe, NLM, SmartDNS / NRPT, Telegram WS Proxy)&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>Как это работает под капотом (winws2.exe, NLM, SmartDNS / NRPT, Telegram WS Proxy)</b></summary>
 
 - **Движок обхода:** используется `bin\winws2.exe` из `bol-van/zapret2` с Lua-библиотеками (`lua\`) и ядерными UDP-фильтрами `bin\filters\windivert_part.*` (снижают нагрузку на CPU и стабилизируют пинг). Кнопка **«Пауза»** (`utils\pause_resume.ps1`) останавливает службу `zapret` и полностью выгружает драйвер `WinDivert`.
 - **Подбор стратегий и гибрид:** в сборке 10 базовых стратегий (`strategies\`) и 12 дополнительных (`configs_archive\`). Быстрая настройка (`utils\auto_setup.ps1`) обновляет списки, подбирает UDP-фейк и проверяет базовые стратегии; глубокий подбор (`utils\deep_optimize.ps1`) тестирует все 22 стратегии и собирает персональный гибрид `custom_auto_synthesized.bat`.
@@ -76,10 +76,10 @@
 - **«Обход ИИ» (SmartDNS + Windows NRPT):** модуль `utils\ai_bypass_helper.ps1` создаёт точечные правила Windows NRPT с тегом `Zapret2KotekAI` только для выбранных ИИ-доменов и направляет их DNS-запросы на живой узел из пула `lists\ai-dns-pool.txt`. Системный DNS провайдера не меняется. Поскольку браузерный DoH идёт в обход системного DNS Windows, он несовместим с NRPT, тогда как отключение QUIC (HTTP/3) полностью совместимо.
 - **Telegram WS Proxy:** нативный C# 5 сервис (`utils\TgWsProxyService.cs`), компилируемый системным `csc.exe` (.NET Framework 4.x) в `bin\tg-ws-proxy.exe` и работающий фоновой службой `zapret-tgws` под учётной записью `NT AUTHORITY\NetworkService` на `127.0.0.1:1443` (только loopback). Поддерживает режимы `smart`, `direct` и `cfonly`; использует равноправную гонку `ws://:80` и `wss://:443` (внутри весь трафик зашифрован MTProto) и встроенный fallback-пул Cloudflare. Секрет хранится в `HKLM\SOFTWARE\Zapret2\TgWsSecret`.
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Структура папок, пользовательские списки и флаги запуска&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>Структура папок, пользовательские списки и флаги запуска</b></summary>
 
 - `!_START_KOTEK.bat` — основной запуск WPF-интерфейса (с запросом UAC). Поддерживает консольный режим: `!_START_KOTEK.bat --cli`.
 - `strategies\` и `configs_archive\` — базовые (10) и дополнительные (12) `.bat`-стратегии.
@@ -91,21 +91,21 @@
   - `ai-dns-pool.txt` — пул SmartDNS-узлов для раздела «Обход ИИ».
 - `utils\` — PowerShell-скрипты, WPF-разметка (`gui_layout.xaml`), конфигурация целей (`targets.txt`) и отдельные `.bat`-утилиты для ручного запуска (`AUTO_SETUP.bat`, `DEEP_OPTIMIZE.bat`, `PAUSE_RESUME.bat`, `UNINSTALL.bat`).
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Обновления и проверка целостности (SHA256SUMS.txt)&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>Обновления и проверка целостности (SHA256SUMS.txt)</b></summary>
 
 - Программа обновляется только из проверенных релизов репозитория `vanch150/zapret2-kotek` (ядро `bol-van/zapret2` напрямую у пользователей не подменяется).
 - Фоновое автообновление (`utils\autoupdate_task.ps1`) регистрирует задачу в Планировщике Windows с условием запуска в простое ПК (`-RunOnlyIfIdle`), с выбором периодичности (раз в неделю, дважды в неделю, раз в месяц или при старте Windows).
 - В `utils\self_update.ps1` действует обязательная проверка контрольных сумм по `SHA256SUMS.txt` (режим fail-closed: при несовпадении хэша или отсутствии файла обновление отменяется) и защита распаковки от Zip-Slip.
 - При включении фонового автообновления выставляются строгие NTFS-права (`icacls`) на папки скриптов и бинарников с сохранением минимально необходимых прав для `NT AUTHORITY\NetworkService` (чтение/запуск `tg-ws-proxy.exe` и запись только в `bin\logs\`). Все пользовательские списки (`*-user.txt`, `ai-custom-domains.txt`, `targets.txt`), настройки, бэкапы браузера и секрет Telegram сохраняются автоматически.
 
-&lt;/details&gt;
+</details>
 
 ## Благодарности и лицензия
 
-Проект распространяется под лицензией [MIT](https://www.google.com/search?q=LICENSE) и собран на базе открытых разработок:
+Проект распространяется под лицензией [MIT](LICENSE) и собран на базе открытых разработок:
 
 - [bol-van/zapret2](https://github.com/bol-van/zapret2) — движок `winws2.exe`, Lua-библиотеки и ядерные фильтры `windivert_part.*`.
 - [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) — списки доменов/IPSet, коллекция `.bin`-фейков и базовые стратегии.
