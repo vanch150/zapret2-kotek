@@ -1,11 +1,18 @@
 ﻿param(
     [string]$Root = ''
 )
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $ErrorActionPreference = 'Continue'
 . (Join-Path $PSScriptRoot 'common.ps1')
 $Root = Resolve-Z2Root $Root
+$env:Z2_ROOT = $Root
 $Version = Get-Z2Version $Root
+
+function Read-Z2Line([string]$Prompt) {
+    $val = Read-Host $Prompt
+    if ($null -eq $val) { exit 0 }
+    return $val
+}
 
 function Show-FlowsealUpstreamCheck {
     $upVer = '1.10.4'
@@ -18,7 +25,7 @@ function Show-FlowsealUpstreamCheck {
     } catch {
         Write-Host '  [!] Не удалось проверить upstream Flowseal.' -ForegroundColor Yellow
     }
-    Read-Host '  Нажми Enter'
+    [void](Read-Z2Line '  Нажми Enter')
 }
 
 while ($true) {
@@ -51,11 +58,11 @@ while ($true) {
     Write-Host '  12. Удалить службы Zapret2 (uninstall.ps1)'
     Write-Host '   0. Выход'
     Write-Host '  --------------------------------------------------------'
-    $ch = (Read-Host '  Выбери пункт (0-12)').Trim()
+    $ch = (Read-Z2Line '  Выбери пункт (0-12)').Trim()
 
     switch ($ch) {
         '0' { exit 0 }
-        '1' { & (Join-Path $Root 'utils\auto_setup.ps1') -Root $Root; Read-Host '  Нажми Enter' }
+        '1' { & (Join-Path $Root 'utils\auto_setup.ps1') -Root $Root; [void](Read-Z2Line '  Нажми Enter') }
         '2' {
             $core = @(Get-Z2Strategies $Root 'core')
             $arch = @(Get-Z2Strategies $Root 'arch')
@@ -65,15 +72,15 @@ while ($true) {
                 $tag = if ($i -lt $core.Count) { '[BASE]' } else { '[ARCH]' }
                 Write-Host ("  {0,2}. {1} {2}" -f ($i + 1), $tag, $all[$i].Name)
             }
-            $n = Read-Host "`n  Номер стратегии (Enter = отмена)"
+            $n = Read-Z2Line "`n  Номер стратегии (Enter = отмена)"
             $idx = 0
             if ([int]::TryParse($n, [ref]$idx) -and $idx -ge 1 -and $idx -le $all.Count) {
                 & (Join-Path $Root 'utils\apply_strategy.ps1') -Root $Root -BatPath $all[$idx - 1].FullName
-                Read-Host '  Нажми Enter'
+                [void](Read-Z2Line '  Нажми Enter')
             }
         }
-        '3' { & (Join-Path $Root 'utils\deep_optimize.ps1') -Root $Root; Read-Host '  Нажми Enter' }
-        '4' { & (Join-Path $Root 'utils\tgws_helper.ps1') menu }
+        '3' { & (Join-Path $Root 'utils\deep_optimize.ps1') -Root $Root; [void](Read-Z2Line '  Нажми Enter') }
+        '4' { $env:Z2_ROOT = $Root; & (Join-Path $Root 'utils\tgws_helper.ps1') menu }
         '5' { & (Join-Path $Root 'utils\fake_selector.ps1') -Action menu -Root $Root }
         '6' {
             $next = switch ($ipMode) { 'loaded' { 'none' } 'none' { 'any' } default { 'loaded' } }
@@ -95,15 +102,15 @@ while ($true) {
             }
         }
         '8' { & (Join-Path $Root 'utils\browser_helper.ps1') -Action menu -Root $Root }
-        '9' { & (Join-Path $Root 'utils\update_lists.ps1') -Root $Root; Read-Host '  Нажми Enter' }
-        '10' { & (Join-Path $Root 'utils\diag_report.ps1') -Root $Root; Read-Host '  Нажми Enter' }
+        '9' { & (Join-Path $Root 'utils\update_lists.ps1') -Root $Root; [void](Read-Z2Line '  Нажми Enter') }
+        '10' { & (Join-Path $Root 'utils\diag_report.ps1') -Root $Root; [void](Read-Z2Line '  Нажми Enter') }
         '11' {
             Write-Host "`n  [1] Обновление Zapret2 Kotek (GitHub)"
             Write-Host '  [2] Проверка upstream Flowseal (для разработчика)'
-            $uCh = (Read-Host '  Выбери (1-2)').Trim()
-            if ($uCh -eq '1') { & (Join-Path $Root 'utils\self_update.ps1') -Root $Root; Read-Host '  Нажми Enter' }
+            $uCh = (Read-Z2Line '  Выбери (1-2)').Trim()
+            if ($uCh -eq '1') { & (Join-Path $Root 'utils\self_update.ps1') -Root $Root; [void](Read-Z2Line '  Нажми Enter') }
             elseif ($uCh -eq '2') { Show-FlowsealUpstreamCheck }
         }
-        '12' { & (Join-Path $Root 'utils\uninstall.ps1') -Root $Root; if ($LASTEXITCODE -eq 20) { Set-Location $env:TEMP; exit 0 }; Read-Host '  Нажми Enter' }
+        '12' { $global:LASTEXITCODE = 0; & (Join-Path $Root 'utils\uninstall.ps1') -Root $Root; if ($LASTEXITCODE -eq 20) { Set-Location $env:TEMP; exit 0 }; [void](Read-Z2Line '  Нажми Enter') }
     }
 }

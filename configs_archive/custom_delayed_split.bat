@@ -3,7 +3,9 @@ chcp 65001 > nul
 :: Experimental: Delayed ClientHello Split (tcpseg + send:delay=15ms + Timestamp Fake)
 :: Separates fake/first segment and full ClientHello in time to evade stateful DPI reassembly
 
-cd /d "%~dp0..\"
+set "ROOT=%~dp0"
+if exist "%~dp0..\utils\service.bat" set "ROOT=%~dp0..\"
+cd /d "%ROOT%"
 call "%ROOT%utils\service.bat" status_zapret
 call "%ROOT%utils\service.bat" check_updates
 call "%ROOT%utils\service.bat" load_game_filter
@@ -13,7 +15,6 @@ echo:
 chcp 65001 > nul
 if not defined GameFilterTCP set "GameFilterTCP=12"
 if not defined GameFilterUDP set "GameFilterUDP=12"
-set "ROOT=%~dp0..\"
 set "BIN=%ROOT%bin\"
 set "LISTS=%ROOT%lists\"
 set "LUA=%ROOT%lua\"

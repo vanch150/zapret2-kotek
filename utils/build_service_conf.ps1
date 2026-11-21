@@ -1,14 +1,35 @@
 ﻿$ErrorActionPreference = 'Stop'
 $q = [char]34
+
+function ConvertTo-NormPath([string]$p) {
+    if ([string]::IsNullOrWhiteSpace($p)) { return $p }
+    $s = $p.Trim('"', "'")
+    $hadTrail = $s.EndsWith('\') -or $s.EndsWith('/')
+    if ($s -match '^[A-Za-z]:[/\\]' -or $s.Contains('..')) {
+        try {
+            $full = [System.IO.Path]::GetFullPath($s.Replace('/', '\'))
+            $s = $full.Replace('\', '/')
+            if ($hadTrail -and -not $s.EndsWith('/')) { $s += '/' }
+            return $s
+        } catch {}
+    }
+    return $s.Replace('\', '/')
+}
+
 $vars = New-Object 'System.Collections.Generic.Dictionary[string,string]' ([StringComparer]::OrdinalIgnoreCase)
 foreach ($k in @('BIN','LISTS','LUA','GameFilterTCP','GameFilterUDP','GameFilter','DISCORD_FAKE','GAME_FAKE')) {
     $v = [Environment]::GetEnvironmentVariable($k)
-    if ($null -ne $v) { $vars[$k] = $v.Replace('\', '/') }
+    if ($null -ne $v) {
+        if (($k -eq 'DISCORD_FAKE' -or $k -eq 'GAME_FAKE') -and ($v -match '(?i)ACTIVE_.*_UDP\.bin$') -and -not (Test-Path -LiteralPath $v)) {
+            continue
+        }
+        $vars[$k] = ConvertTo-NormPath $v
+    }
 }
 if ($env:Z2_ROOT) {
-    $normR = try { [System.IO.Path]::GetFullPath($env:Z2_ROOT.Trim('"', "'")).TrimEnd('\', '/') + '/' } catch { $env:Z2_ROOT.Replace('\', '/').TrimEnd('/') + '/' }
-    $vars['ROOT'] = $normR.Replace('\', '/')
-    $vars['~dp0'] = $vars['ROOT']
+    $normR = ConvertTo-NormPath ($env:Z2_ROOT.Trim('"', "'").TrimEnd('\', '/') + '\')
+    $vars['ROOT'] = $normR
+    $vars['~dp0'] = $normR
 }
 
 $batTarget = $env:Z2_BAT
@@ -61,29 +82,29 @@ foreach ($l in $lines) {
         break
     }
     if ($tr -match '(?i)^set\s+\x22?([A-Za-z0-9_]+)=(.*?)\x22?$') {
-        $vars[$matches[1]] = (Exp $matches[2]).Replace('\', '/')
+        $vars[$matches[1]] = ConvertTo-NormPath (Exp $matches[2])
         continue
     }
     if ($tr -match '(?i)^if\s+(not\s+)?exist\s+\x22([^\x22]+)\x22\s+if\s+(not\s+)?exist\s+\x22([^\x22]+)\x22\s+set\s+\x22?([A-Za-z0-9_]+)=(.*?)\x22?$') {
-        $neg1 = [bool]$matches[1]; $p1 = (Exp $matches[2]).Replace('/', '\'); $ex1 = Test-Path -LiteralPath $p1
-        $neg2 = [bool]$matches[3]; $p2 = (Exp $matches[4]).Replace('/', '\'); $ex2 = Test-Path -LiteralPath $p2
+        $neg1 = [bool]$matches[1]; $p1 = (ConvertTo-NormPath (Exp $matches[2])).Replace('/', '\'); $ex1 = Test-Path -LiteralPath $p1
+        $neg2 = [bool]$matches[3]; $p2 = (ConvertTo-NormPath (Exp $matches[4])).Replace('/', '\'); $ex2 = Test-Path -LiteralPath $p2
         if ((($neg1 -and -not $ex1) -or (-not $neg1 -and $ex1)) -and (($neg2 -and -not $ex2) -or (-not $neg2 -and $ex2))) {
-            $vars[$matches[5]] = (Exp $matches[6]).Replace('\', '/')
+            $vars[$matches[5]] = ConvertTo-NormPath (Exp $matches[6])
         }
         continue
     }
     if ($tr -match '(?i)^if\s+(not\s+)?exist\s+\x22([^\x22]+)\x22\s+set\s+\x22?([A-Za-z0-9_]+)=(.*?)\x22?$') {
         $neg = [bool]$matches[1]
-        $p = (Exp $matches[2]).Replace('/', '\')
+        $p = (ConvertTo-NormPath (Exp $matches[2])).Replace('/', '\')
         $ex = Test-Path -LiteralPath $p
         if (($neg -and -not $ex) -or (-not $neg -and $ex)) {
-            $vars[$matches[3]] = (Exp $matches[4]).Replace('\', '/')
+            $vars[$matches[3]] = ConvertTo-NormPath (Exp $matches[4])
         }
         continue
     }
     if ($tr -match '(?i)^if\s+not\s+defined\s+([A-Za-z0-9_]+)\s+set\s+\x22?([A-Za-z0-9_]+)=(.*?)\x22?$') {
         if (-not $vars.ContainsKey($matches[1]) -or [string]::IsNullOrEmpty($vars[$matches[1]])) {
-            $vars[$matches[2]] = (Exp $matches[3]).Replace('\', '/')
+            $vars[$matches[2]] = ConvertTo-NormPath (Exp $matches[3])
         }
         continue
     }
@@ -91,6 +112,22 @@ foreach ($l in $lines) {
 
 if (-not $cmdLine) {
     if (($lines -join ' ') -match '(?i)winws\.exe') { exit 2 } else { exit 3 }
+}
+
+foreach ($fk in @('DISCORD_FAKE', 'GAME_FAKE')) {
+    if ($vars.ContainsKey($fk) -and ($vars[$fk] -match '(?i)ACTIVE_.*_UDP\.bin$')) {
+        $fkWin = $vars[$fk].Replace('/', '\')
+        if (-not (Test-Path -LiteralPath $fkWin)) {
+            if ($vars.ContainsKey('BIN') -and -not [string]::IsNullOrWhiteSpace($vars['BIN'])) {
+                $binBase = $vars['BIN']
+                if (-not $binBase.EndsWith('/')) { $binBase += '/' }
+                $fallbackFake = $binBase + 'quic_initial_www_google_com.bin'
+                if (Test-Path -LiteralPath ($fallbackFake.Replace('/', '\'))) {
+                    $vars[$fk] = $fallbackFake
+                }
+            }
+        }
+    }
 }
 
 $idx = $cmdLine.ToLowerInvariant().IndexOf('winws2.exe')
@@ -149,21 +186,26 @@ foreach ($tk in $tokens) {
 }
 if ($curProf.Count -gt 0) { $profiles.Add($curProf) }
 
+$rootWin = if ($env:Z2_ROOT) {
+    try { [System.IO.Path]::GetFullPath($env:Z2_ROOT.Trim('"', "'")).TrimEnd('\', '/') + '\' } catch { $env:Z2_ROOT.Trim('"', "'").TrimEnd('\', '/') + '\' }
+} else { '' }
+
 # 0. WARP Unblock toggle check
 $warpOn = $true
-if ($env:Z2_ROOT) {
-    $warpFlag = Join-Path $env:Z2_ROOT 'utils\warp_unblock.enabled'
+if ($rootWin) {
+    $warpFlag = Join-Path $rootWin 'utils\warp_unblock.enabled'
     if (-not (Test-Path -LiteralPath $warpFlag)) { $warpOn = $false }
 }
 # 1. NLM Filter (--nlm-filter) injection
 $nlmVal = $env:Z2_NLM
-if ([string]::IsNullOrWhiteSpace($nlmVal) -and $env:Z2_ROOT) {
-    $nlmAutoFlag = Join-Path $env:Z2_ROOT 'utils\nlm_auto.enabled'
-    $nlmHelperPs = Join-Path $env:Z2_ROOT 'utils\nlm_helper.ps1'
-    if ((Test-Path -LiteralPath $nlmAutoFlag) -and (Test-Path -LiteralPath $nlmHelperPs)) {
-        try { & $nlmHelperPs -Action auto -Root $env:Z2_ROOT | Out-Null } catch {}
+if ([string]::IsNullOrWhiteSpace($nlmVal) -and $rootWin) {
+    $nlmAutoFlag = Join-Path $rootWin 'utils\nlm_auto.enabled'
+    $nlmHelperPs = Join-Path $rootWin 'utils\nlm_helper.ps1'
+    if (($env:Z2_SKIP_NLM_AUTO -ne '1') -and (Test-Path -LiteralPath $nlmAutoFlag) -and (Test-Path -LiteralPath $nlmHelperPs)) {
+        try { & $nlmHelperPs -Action auto -Root $rootWin | Out-Null } catch {}
+        $global:LASTEXITCODE = 0
     }
-    $nlmFile = Join-Path $env:Z2_ROOT 'utils\nlm_filter.enabled'
+    $nlmFile = Join-Path $rootWin 'utils\nlm_filter.enabled'
     if (Test-Path -LiteralPath $nlmFile) {
         $nlmFirst = Get-Content -LiteralPath $nlmFile -Encoding UTF8 | Select-Object -First 1; if ($null -ne $nlmFirst) { $nlmVal = $nlmFirst.Trim() }
     }
@@ -190,31 +232,49 @@ if (-not [string]::IsNullOrWhiteSpace($nlmVal) -and $nlmVal -match '^(?i)(NEG:|!
     }
 }
 
-# 2. Strip disabled GameFilter (port 12)
+# 2. Strip disabled GameFilter (port 12) and apply Kernel Filters
 $gfTcpOff = (-not $vars.ContainsKey('GameFilterTCP')) -or ($vars['GameFilterTCP'] -eq '12')
 $gfUdpOff = (-not $vars.ContainsKey('GameFilterUDP')) -or ($vars['GameFilterUDP'] -eq '12')
 
-$kernelFilterOn = ($env:Z2_ROOT -and (Test-Path -LiteralPath (Join-Path $env:Z2_ROOT 'utils\kernel_filter.enabled')))
+$kernelFilterOn = ($rootWin -and (Test-Path -LiteralPath (Join-Path $rootWin 'utils\kernel_filter.enabled')))
+if ($kernelFilterOn) {
+    if (-not $vars.ContainsKey('BIN') -or [string]::IsNullOrWhiteSpace($vars['BIN'])) {
+        $kernelFilterOn = $false
+    } else {
+        $kfBin = $vars['BIN'].Replace('/', '\')
+        $kfRequired = @('windivert_part.quic_initial_ietf.txt','windivert_part.discord_media.txt','windivert_part.stun.txt')
+        if ($warpOn) { $kfRequired += 'windivert_part.wireguard.txt' }
+        foreach ($kfReq in $kfRequired) {
+            if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $kfBin 'filters') $kfReq))) { $kernelFilterOn = $false; break }
+        }
+    }
+}
 $removeHeaderIdx = New-Object System.Collections.Generic.List[int]
-$wideUdpPorts = @('443','500','1701','2408','4500','19294-19344','50000-50100')
+# Keep WARP/IKEv2/L2TP ports (500,1701,2408,4500) in --wf-udp-out when warp_unblock is active
+$wideUdpPorts = if ($warpOn) {
+    @('443','19294-19344','50000-50100')
+} else {
+    @('443','500','1701','2408','4500','19294-19344','50000-50100')
+}
+$hasWfUdpOut = $false
 
 for ($i = 0; $i -lt $header.Count; $i++) {
     if ($gfTcpOff -and $header[$i] -match '^(?i)(--wf-tcp-(?:out|in)=)(.+)$') {
-        $pts = ($matches[2] -split ',') | Where-Object { $_ -ne '12' -and $_ -ne '' }
-        $header[$i] = $matches[1] + ($pts -join ',')
+        $pts = @($matches[2] -split ',' | Where-Object { $_ -ne '12' -and $_ -ne '' })
+        if ($pts.Count -gt 0) {
+            $header[$i] = $matches[1] + ($pts -join ',')
+        } else {
+            $removeHeaderIdx.Add($i)
+        }
     }
     if ($header[$i] -match '^(?i)(--wf-udp-(?:out|in)=)(.+)$') {
+        $isWfUdpOut = ($matches[1] -ieq '--wf-udp-out=')
+        if ($isWfUdpOut) { $hasWfUdpOut = $true }
         $pts = @($matches[2] -split ',' | Where-Object { $_ -ne '' })
         if ($gfUdpOff) { $pts = @($pts | Where-Object { $_ -ne '12' }) }
         if (-not $warpOn) { $pts = @($pts | Where-Object { $_ -notin @('500','1701','2408','4500') }) }
-        if ($kernelFilterOn -and $vars.ContainsKey('BIN')) {
-            $kfBin = $vars['BIN'].Replace('/', '\')
-            foreach ($kfReq in @('windivert_part.quic_initial_ietf.txt','windivert_part.discord_media.txt','windivert_part.stun.txt','windivert_part.wireguard.txt')) {
-                if (-not (Test-Path -LiteralPath (Join-Path (Join-Path $kfBin 'filters') $kfReq))) { $kernelFilterOn = $false; break }
-            }
-        }
-        if ($kernelFilterOn) {
-            # Keep only GameFilterUDP (or custom ports); wide UDP ports move to --wf-raw-part
+        if ($kernelFilterOn -and $isWfUdpOut) {
+            # Keep only GameFilterUDP, WARP (if enabled), or custom ports; wide UDP ports move to --wf-raw-part
             $pts = @($pts | Where-Object { $_ -notin $wideUdpPorts })
         }
         if ($pts.Count -gt 0) {
@@ -227,7 +287,7 @@ for ($i = 0; $i -lt $header.Count; $i++) {
 for ($ri = $removeHeaderIdx.Count - 1; $ri -ge 0; $ri--) {
     $header.RemoveAt($removeHeaderIdx[$ri])
 }
-if ($kernelFilterOn -and $vars.ContainsKey('BIN')) {
+if ($kernelFilterOn -and $hasWfUdpOut -and $vars.ContainsKey('BIN')) {
     $binSlash = $vars['BIN']
     if (-not $binSlash.EndsWith('/')) { $binSlash += '/' }
     $partNames = @('windivert_part.quic_initial_ietf.txt', 'windivert_part.discord_media.txt', 'windivert_part.stun.txt')
@@ -241,8 +301,8 @@ if ($kernelFilterOn -and $vars.ContainsKey('BIN')) {
 }
 
 # 2b. Optional WinDivert Priority (--wf-priority=<int>, -30000..30000) via utils\wf_priority.conf
-if ($env:Z2_ROOT) {
-    $wfPrioFile = Join-Path $env:Z2_ROOT 'utils\wf_priority.conf'
+if ($rootWin) {
+    $wfPrioFile = Join-Path $rootWin 'utils\wf_priority.conf'
     if (Test-Path -LiteralPath $wfPrioFile) {
         $pRaw = (Get-Content -LiteralPath $wfPrioFile -TotalCount 1 -ErrorAction SilentlyContinue)
         $pInt = 0
@@ -253,7 +313,7 @@ if ($env:Z2_ROOT) {
 }
 
 if ([string]::IsNullOrEmpty($env:Z2_AUTOHOST)) {
-    $autoHostOn = ($env:Z2_ROOT -and (Test-Path -LiteralPath (Join-Path $env:Z2_ROOT 'utils\autohostlist.enabled')))
+    $autoHostOn = ($rootWin -and (Test-Path -LiteralPath (Join-Path $rootWin 'utils\autohostlist.enabled')))
 } else {
     $autoHostOn = ($env:Z2_AUTOHOST -eq '1')
 }
@@ -287,14 +347,10 @@ foreach ($p in $profiles) {
     }
     if (-not $skip) {
         if (-not $autoHostOn) {
+            # When Z2_AUTOHOST=0, drop all --hostlist-auto* flags cleanly without converting to --hostlist
             $cleaned = New-Object System.Collections.Generic.List[string]
             foreach ($tk in $p) {
-                if ($tk -match '^(?i)--hostlist-auto(-|$)') {
-                    if ($tk -match '^(?i)--hostlist-auto=(.+)$') {
-                        $cleaned.Add('--hostlist=' + $matches[1])
-                    }
-                    continue
-                }
+                if ($tk -match '^(?i)--hostlist-auto(=|-|$)') { continue }
                 $cleaned.Add($tk)
             }
             $activeProfiles.Add($cleaned)
@@ -330,7 +386,6 @@ if ($autoHostOn -and $listsDir) {
             $p.Insert($insIdx, $autoHostArg)
         }
         if ($hasGenList -and $isTcp80_443) {
-            # Remove plain --hostlist=list-auto.txt if present and replace/ensure --hostlist-auto=list-auto.txt
             for ($j = $p.Count - 1; $j -ge 0; $j--) {
                 if ($p[$j] -match '(?i)^--hostlist=.*list-auto\.txt$') {
                     $p.RemoveAt($j)
@@ -342,12 +397,11 @@ if ($autoHostOn -and $listsDir) {
                     if ($p[$j] -match '(?i)^--hostlist=.*list-general(-user)?\.txt$') { $insIdx = $j + 1 }
                 }
                 $p.Insert($insIdx, '--hostlist-auto-retrans-reset=1')
-                $p.Insert($insIdx, '--hostlist-auto-retrans-threshold=3')
+                $p.Insert($insIdx, '--hostlist-auto-retrans-threshold=4')
                 $p.Insert($insIdx, '--hostlist-auto-fail-time=60')
-                $p.Insert($insIdx, '--hostlist-auto-fail-threshold=2')
+                $p.Insert($insIdx, '--hostlist-auto-fail-threshold=3')
                 $p.Insert($insIdx, $autoHostAutoArg)
             }
-            # Ensure --in-range=-s4096 is present so incoming RST/redirect detection works
             $hasInRange = $false
             $outRangeIdx = -1
             for ($j = 0; $j -lt $p.Count; $j++) {
@@ -362,6 +416,8 @@ if ($autoHostOn -and $listsDir) {
 }
 
 # 3b. Ensure Discord UDP profile has --out-range=-d4 and list-general TCP includes port 8443
+$needsTcp8443 = $false
+$needsTcpEmpty = $false
 foreach ($p in $activeProfiles) {
     $isDiscordUdp = $false
     $hasOutRange = $false
@@ -376,6 +432,9 @@ foreach ($p in $activeProfiles) {
         if ($insertRangeIdx -lt 0 -and ($p[$j] -match '^(?i)--payload=' -or $p[$j] -match '^(?i)--lua-desync=')) {
             $insertRangeIdx = $j
         }
+        if ($p[$j] -match '^(?i)--payload=.*\bempty\b' -or $p[$j] -match '^(?i)--lua-desync=(syndata|wssize|oob)\b') {
+            $needsTcpEmpty = $true
+        }
     }
     if ($isDiscordUdp -and -not $hasOutRange) {
         if ($insertRangeIdx -ge 0) { $p.Insert($insertRangeIdx, '--out-range=-d4') }
@@ -387,6 +446,32 @@ foreach ($p in $activeProfiles) {
             if ($tpts -contains '443' -and $tpts -notcontains '8443') {
                 $tpts += '8443'
                 $p[$tcpFilterIdx] = $matches[1] + ($tpts -join ',')
+            }
+        }
+    }
+    if ($tcpFilterIdx -ge 0 -and $p[$tcpFilterIdx] -match '^(?i)--filter-tcp=(.+)$') {
+        $allTpts = @($matches[1] -split ',')
+        if ($allTpts -contains '8443') { $needsTcp8443 = $true }
+    }
+}
+
+# 3c. Auto-inject --wf-tcp-empty=1 when profiles use --payload=empty, syndata, wssize, or oob
+if ($needsTcpEmpty) {
+    $hasTcpEmpty = $false
+    foreach ($h in $header) { if ($h -match '^(?i)--wf-tcp-empty=') { $hasTcpEmpty = $true; break } }
+    if (-not $hasTcpEmpty) {
+        $header.Insert(0, '--wf-tcp-empty=1')
+    }
+}
+
+# 3d. Ensure port 8443 is present in --wf-tcp-out unconditionally when used by any --filter-tcp
+if ($needsTcp8443) {
+    for ($i = 0; $i -lt $header.Count; $i++) {
+        if ($header[$i] -match '^(?i)(--wf-tcp-out=)(.+)$') {
+            $pts = @($matches[2] -split ',')
+            if ($pts -notcontains '8443') {
+                $pts += '8443'
+                $header[$i] = $matches[1] + ($pts -join ',')
             }
         }
     }
@@ -448,6 +533,26 @@ if ($hasAnyWfTcpIn) {
     }
 }
 
+# 5. Sync effective exclude list (user list-general-user.txt overrides system list-exclude.txt) and prune list-auto.txt
+if ($listsDir) {
+    $syncScript = Join-Path $PSScriptRoot 'sync_lists.ps1'
+    if (Test-Path -LiteralPath $syncScript) {
+        $syncRoot = if ($rootWin) { $rootWin } else { Split-Path -Parent $PSScriptRoot }
+        & $syncScript -Root $syncRoot
+    }
+    $effExWin = ($listsDir + 'list-exclude.effective.txt').Replace('/', '\')
+    if (Test-Path -LiteralPath $effExWin) {
+        $effExArg = '--hostlist-exclude=' + $listsDir + 'list-exclude.effective.txt'
+        foreach ($p in $activeProfiles) {
+            for ($j = 0; $j -lt $p.Count; $j++) {
+                if ($p[$j] -match '(?i)^--hostlist-exclude=.*[/\\]list-exclude\.txt$') {
+                    $p[$j] = $effExArg
+                }
+            }
+        }
+    }
+}
+
 $finalTokens = New-Object System.Collections.Generic.List[string]
 foreach ($h in $header) { $finalTokens.Add($h) }
 for ($i = 0; $i -lt $activeProfiles.Count; $i++) {
@@ -457,9 +562,10 @@ for ($i = 0; $i -lt $activeProfiles.Count; $i++) {
 
 $out = foreach ($tk in $finalTokens) {
     if ($tk -match '[\s\x27\x22(){}\[\]*?~]') {
-        $q + $tk + $q
+        $q + ($tk -replace '"', '\"') + $q
     } else {
         $tk
     }
 }
 [IO.File]::WriteAllText($env:Z2_CONF, ($out -join "`r`n"), (New-Object System.Text.UTF8Encoding $false))
+exit 0

@@ -24,51 +24,183 @@ function Exit-Z2GuiMutex {
     }
 }
 
-function Start-Z2AsyncTask([string]$Root, [string]$ScriptPath, [string]$ExtraArgs, [string]$LogPath) {
+function ConvertTo-Z2ArgTokens($RawArgs) {
+    $tokens = New-Object System.Collections.Generic.List[string]
+    if ($null -eq $RawArgs) { return $tokens }
+
+    if ($RawArgs -is [System.Array]) {
+        foreach ($item in $RawArgs) {
+            if ($null -ne $item) { $tokens.Add([string]$item) }
+        }
+        return $tokens
+    }
+
+    $str = [string]$RawArgs
+    if ([string]::IsNullOrWhiteSpace($str)) { return $tokens }
+
+    $sb = New-Object System.Text.StringBuilder
+    $inSingle = $false
+    $inDouble = $false
+    $hasToken = $false
+    $len = $str.Length
+
+    for ($i = 0; $i -lt $len; $i++) {
+        $ch = $str[$i]
+        if ($inSingle) {
+            if ($ch -eq "'") {
+                if (($i + 1) -lt $len -and $str[$i + 1] -eq "'") {
+                    [void]$sb.Append("'")
+                    $i++
+                } else {
+                    $inSingle = $false
+                }
+            } else {
+                [void]$sb.Append($ch)
+            }
+        } elseif ($inDouble) {
+            if ($ch -eq '"') {
+                if (($i + 1) -lt $len -and $str[$i + 1] -eq '"') {
+                    [void]$sb.Append('"')
+                    $i++
+                } else {
+                    $inDouble = $false
+                }
+            } else {
+                [void]$sb.Append($ch)
+            }
+        } else {
+            if ([char]::IsWhiteSpace($ch)) {
+                if ($hasToken) {
+                    $tokens.Add($sb.ToString())
+                    [void]$sb.Clear()
+                    $hasToken = $false
+                }
+            } elseif ($ch -eq "'") {
+                $inSingle = $true
+                $hasToken = $true
+            } elseif ($ch -eq '"') {
+                $inDouble = $true
+                $hasToken = $true
+            } else {
+                [void]$sb.Append($ch)
+                $hasToken = $true
+            }
+        }
+    }
+    if ($hasToken) {
+        $tokens.Add($sb.ToString())
+    }
+    return $tokens
+}
+
+function Start-Z2AsyncTask([string]$Root, [string]$ScriptPath, $ExtraArgs, [string]$LogPath) {
     if (Test-Path -LiteralPath $LogPath) {
         Remove-Item -LiteralPath $LogPath -Force -ErrorAction SilentlyContinue
     }
-    $escScript = $ScriptPath.Replace("'", "''")
-    $escLog    = $LogPath.Replace("'", "''")
-    $runnerCmd = "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; `$enc=New-Object System.Text.UTF8Encoding(`$false); `$global:LASTEXITCODE=0; & '$escScript' $ExtraArgs *>&1 | ForEach-Object { [System.IO.File]::AppendAllText('$escLog', `"`$(`$_)``r``n`", `$enc) }; exit ([int]`$LASTEXITCODE)"
-    $encBytes  = [System.Text.Encoding]::Unicode.GetBytes($runnerCmd)
-    $b64Cmd    = [System.Convert]::ToBase64String($encBytes)
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName               = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-    $psi.Arguments              = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64Cmd"
-    $psi.WorkingDirectory       = $Root
-    $psi.UseShellExecute        = $false
-    $psi.CreateNoWindow         = $true
-    return [System.Diagnostics.Process]::Start($psi)
-}
+    $b64Script = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($ScriptPath))
+    $b64Log    = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($LogPath))
 
-function Read-Z2TaskLogTail([string]$LogPath, [int]$MaxBytes = 2048) {
-    if (-not (Test-Path -LiteralPath $LogPath)) { return $null }
-    $fs = New-Object System.IO.FileStream($LogPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
-    try {
-        $len = $fs.Length
-        if ($len -le 0) { return @{ Length = 0L; LastLine = '' } }
-        $tailBytes = [int][Math]::Min([long]$MaxBytes, $len)
-        [void]$fs.Seek(-[long]$tailBytes, [System.IO.SeekOrigin]::End)
-        $buf = New-Object byte[] $tailBytes
-        $readN = $fs.Read($buf, 0, $tailBytes)
-        $startOff = 0
-        while ($startOff -lt $readN -and (($buf[$startOff] -band 0xC0) -eq 0x80)) { $startOff++ }
-        $chunk = [System.Text.Encoding]::UTF8.GetString($buf, $startOff, $readN - $startOff)
-        $parts = $chunk -split '[\r\n]+'
-        $lastLine = ''
-        for ($li = $parts.Length - 1; $li -ge 0; $li--) {
-            $cand = $parts[$li].Trim()
-            if ($cand.Length -gt 2 -and $cand -notmatch '^[\s=\-]+$' -and $cand -notmatch '^[/\\_()^\s\*~]+$') {
-                $lastLine = $cand
-                break
+    $argLines = New-Object System.Collections.Generic.List[string]
+    $argLines.Add('$namedArgs = @{}')
+    $argLines.Add('$posArgs = New-Object System.Collections.Generic.List[string]')
+
+    if ($ExtraArgs -is [System.Collections.IDictionary]) {
+        foreach ($k in $ExtraArgs.Keys) {
+            $kName = [string]$k
+            if ($kName -match '^[A-Za-z][A-Za-z0-9_]*$') {
+                $v = $ExtraArgs[$k]
+                if ($v -is [bool]) {
+                    $bVal = if ($v) { '$true' } else { '$false' }
+                    $argLines.Add("`$namedArgs['$kName'] = $bVal")
+                } else {
+                    $b64v = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$v))
+                    $argLines.Add("`$namedArgs['$kName'] = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64v'))")
+                }
             }
         }
-        return @{ Length = $len; LastLine = $lastLine }
-    } finally {
-        $fs.Close()
+    } else {
+        $tokens = @(ConvertTo-Z2ArgTokens $ExtraArgs)
+        for ($i = 0; $i -lt $tokens.Count; $i++) {
+            $tok = $tokens[$i]
+            if ($tok -match '^-([A-Za-z][A-Za-z0-9_]*):(.*)$') {
+                $pName = $matches[1]
+                $pRaw  = $matches[2]
+                if ($pRaw -ieq '$true' -or $pRaw -ieq 'true') {
+                    $argLines.Add("`$namedArgs['$pName'] = `$true")
+                } elseif ($pRaw -ieq '$false' -or $pRaw -ieq 'false') {
+                    $argLines.Add("`$namedArgs['$pName'] = `$false")
+                } else {
+                    $b64v = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($pRaw))
+                    $argLines.Add("`$namedArgs['$pName'] = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64v'))")
+                }
+            } elseif ($tok -match '^-([A-Za-z][A-Za-z0-9_]*)$') {
+                $pName = $matches[1]
+                if (($i + 1) -lt $tokens.Count -and -not ($tokens[$i + 1] -match '^-[A-Za-z][A-Za-z0-9_]*(?::.*)?$')) {
+                    $b64v = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($tokens[$i + 1]))
+                    $argLines.Add("`$namedArgs['$pName'] = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64v'))")
+                    $i++
+                } else {
+                    $argLines.Add("`$namedArgs['$pName'] = `$true")
+                }
+            } else {
+                $b64v = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($tok))
+                $argLines.Add("[void]`$posArgs.Add([System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64v')))")
+            }
+        }
     }
+
+    $argSetup = $argLines -join "; "
+    $runnerCmd = @"
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
+`$enc = New-Object System.Text.UTF8Encoding(`$false)
+`$scriptPath = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64Script'))
+`$logPath = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64Log'))
+$argSetup
+`$posArr = `$posArgs.ToArray()
+`$fs = `$null
+`$sw = `$null
+`$exitCode = 0
+`$psFailed = `$false
+try {
+    `$fs = New-Object System.IO.FileStream(`$logPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+    `$sw = New-Object System.IO.StreamWriter(`$fs, `$enc)
+    `$sw.AutoFlush = `$true
+    `$global:LASTEXITCODE = 0
+    try {
+        & `$scriptPath @namedArgs @posArr *>&1 | ForEach-Object { `$sw.WriteLine([string]`$_) }
+        if (-not `$?) { `$psFailed = `$true }
+    } catch {
+        `$psFailed = `$true
+        try { `$sw.WriteLine([string]`$_); if (`$_.ScriptStackTrace) { `$sw.WriteLine([string]`$_.ScriptStackTrace) } } catch {}
+    }
+    if (`$null -ne `$global:LASTEXITCODE -and [int]`$global:LASTEXITCODE -ne 0) {
+        `$exitCode = [int]`$global:LASTEXITCODE
+    } elseif (`$psFailed) {
+        `$exitCode = 1
+    }
+} finally {
+    if (`$null -ne `$sw) {
+        try { `$sw.Flush() } catch {}
+        try { `$sw.Dispose() } catch {}
+    }
+    if (`$null -ne `$fs) {
+        try { `$fs.Dispose() } catch {}
+    }
+}
+exit `$exitCode
+"@
+
+    $encBytes = [System.Text.Encoding]::Unicode.GetBytes($runnerCmd)
+    $b64Cmd   = [System.Convert]::ToBase64String($encBytes)
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName         = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+    $psi.Arguments        = "-NoProfile -ExecutionPolicy Bypass -EncodedCommand $b64Cmd"
+    $psi.WorkingDirectory = $Root
+    $psi.UseShellExecute  = $false
+    $psi.CreateNoWindow   = $true
+    return [System.Diagnostics.Process]::Start($psi)
 }
 
 function Stop-Z2ActiveTask($Proc) {

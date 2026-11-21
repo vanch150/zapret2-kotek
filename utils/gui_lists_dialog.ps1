@@ -1,35 +1,69 @@
 ﻿# Zapret2 Kotek — Built-in Modal Domain Lists Editor (utils/gui_lists_dialog.ps1)
 
-function Normalize-Z2Domain([string]$RawInput) {
+function Normalize-Z2Domain([string]$RawInput, [bool]$AllowNegation = $true) {
     if ([string]::IsNullOrWhiteSpace($RawInput)) { return '' }
     $s = $RawInput.Trim().ToLowerInvariant()
     $neg = ''
     if ($s.StartsWith('!')) {
+        if (-not $AllowNegation) { return '' }
         $neg = '!'
         $s = $s.Substring(1).Trim()
+        if ($s.StartsWith('!')) { return '' }
     }
     $s = $s -replace '^[a-z][a-z0-9+\-.]*://', ''
     $s = $s -replace '^//+', ''
     $s = ($s -split '[/?#]')[0]
+    if ($s.Contains('@')) {
+        $s = $s.Substring($s.LastIndexOf('@') + 1)
+    }
     $s = ($s -split ':')[0]
     $s = $s.Trim().Trim('.')
     if ($s -match '^www\.[^.]+\..+') { $s = $s.Substring(4) }
-    if ($s -match '[^\x00-\x7F]') { try { $s = (New-Object System.Globalization.IdnMapping).GetAscii($s) } catch {} }
+    if ($s -match '[^\x00-\x7F]') {
+        try {
+            $s = (New-Object System.Globalization.IdnMapping).GetAscii($s)
+        } catch {
+            return ''
+        }
+    }
+    if ($s.Length -eq 0 -or $s.Length -gt 253) { return '' }
     if ($s -notmatch '^[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)+$') {
         return ''
     }
+    if ($s -match '^\d{1,3}(\.\d{1,3}){3}$') { return '' }
+    $labels = $s -split '\.'
+    foreach ($lbl in $labels) {
+        if ($lbl.Length -gt 63) { return '' }
+    }
+    $tld = $labels[$labels.Length - 1]
+    if ($tld -match '^\d+$') { return '' }
     return ($neg + $s)
 }
 
-function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'general', [string]$AccentHex = '#9FC7B8') {
-    $genPath = Join-Path $Root 'lists\list-general-user.txt'
-    $exPath  = Join-Path $Root 'lists\list-exclude-user.txt'
+function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'general', [string]$AccentHex = '#7BC4A4') {
+    if (-not (Get-Command Show-Z2MessageDialog -ErrorAction SilentlyContinue)) {
+        $msgDlgPath = Join-Path $Root 'utils\gui_msg_dialog.ps1'
+        if (Test-Path -LiteralPath $msgDlgPath) { . $msgDlgPath }
+    }
+
+    $accent = if ($AccentHex -match '^#[0-9A-Fa-f]{6}$') { $AccentHex } else { '#7BC4A4' }
+    $genPath  = Join-Path $Root 'lists\list-general-user.txt'
+    $exPath   = Join-Path $Root 'lists\list-exclude-user.txt'
     $autoPath = Join-Path $Root 'lists\list-auto.txt'
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
-    if (-not (Test-Path -LiteralPath $genPath)) { [System.IO.File]::WriteAllText($genPath, "# Свои домены для обхода (по одному в строке)`r`n", $utf8NoBom) }
-    if (-not (Test-Path -LiteralPath $exPath))  { [System.IO.File]::WriteAllText($exPath,  "# Исключения (по одному домену в строке)`r`n", $utf8NoBom) }
-    if (-not (Test-Path -LiteralPath $autoPath)) { [System.IO.File]::WriteAllText($autoPath, '', $utf8NoBom) }
+    try {
+        $listsDir = Join-Path $Root 'lists'
+        if (-not (Test-Path -LiteralPath $listsDir)) { [void][System.IO.Directory]::CreateDirectory($listsDir) }
+        if (-not (Test-Path -LiteralPath $genPath))  { [System.IO.File]::WriteAllText($genPath,  "# Свои домены для обхода (по одному в строке)`r`n", $utf8NoBom) }
+        if (-not (Test-Path -LiteralPath $exPath))   { [System.IO.File]::WriteAllText($exPath,   "# Исключения (по одному домену в строке)`r`n", $utf8NoBom) }
+        if (-not (Test-Path -LiteralPath $autoPath)) { [System.IO.File]::WriteAllText($autoPath, '', $utf8NoBom) }
+    } catch {
+        if (Get-Command Show-Z2MessageDialog -ErrorAction SilentlyContinue) {
+            [void](Show-Z2MessageDialog -Owner $OwnerWin -Title 'Ошибка доступа к файлам' -Message "Не удалось подготовить файлы списков в папке lists:`n$($_.Exception.Message)" -Kind Error -Buttons OK -AccentHex $accent)
+        }
+        return $false
+    }
 
     $dlgXamlStr = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -42,7 +76,7 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
         <Style x:Key="DlgTabActive" TargetType="Button">
             <Setter Property="Background" Value="#282C34"/>
             <Setter Property="Foreground" Value="#F1F3F5"/>
-            <Setter Property="BorderBrush" Value="#7BC4A4"/>
+            <Setter Property="BorderBrush" Value="__ACCENT__"/>
             <Setter Property="BorderThickness" Value="1"/>
             <Setter Property="Padding" Value="14,7"/>
             <Setter Property="FontSize" Value="12.5"/>
@@ -77,7 +111,7 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
             </Setter>
         </Style>
         <Style x:Key="DlgPrimaryBtn" TargetType="Button">
-            <Setter Property="Background" Value="#9FC7B8"/>
+            <Setter Property="Background" Value="__ACCENT__"/>
             <Setter Property="Foreground" Value="#121316"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="14,8"/>
@@ -91,7 +125,7 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Background" Value="#B4D6C9"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Opacity" Value="0.88"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -144,7 +178,7 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
             </Grid.ColumnDefinitions>
             <Border Grid.Column="0" Background="#1A1C21" BorderBrush="#2E323B" BorderThickness="1" CornerRadius="6" Padding="10,0" Margin="0,0,8,0">
                 <Grid>
-                    <TextBox x:Name="TxtDlgDomain" Background="Transparent" Foreground="#F1F3F5" CaretBrush="#7BC4A4" BorderThickness="0" FontSize="13" VerticalContentAlignment="Center" Height="34"/>
+                    <TextBox x:Name="TxtDlgDomain" Background="Transparent" Foreground="#F1F3F5" CaretBrush="__ACCENT__" BorderThickness="0" FontSize="13" VerticalContentAlignment="Center" Height="34"/>
                     <TextBlock x:Name="TxtDlgPlaceholder" Text="Вставь ссылку или домен (например: https://www.site.com/page)" Foreground="#737A86" FontSize="12" VerticalAlignment="Center" IsHitTestVisible="False"/>
                 </Grid>
             </Border>
@@ -214,18 +248,23 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
 </Window>
 '@
 
-    if ($AccentHex -match '^#[0-9A-Fa-f]{6}$') { $dlgXamlStr = $dlgXamlStr.Replace('#9FC7B8', $AccentHex) }
+    $dlgXamlStr = $dlgXamlStr.Replace('__ACCENT__', $accent)
     [xml]$dx = $dlgXamlStr
     $dr = New-Object System.Xml.XmlNodeReader $dx
-    $dlg = [Windows.Markup.XamlReader]::Load($dr)
-    if ($null -ne $OwnerWin) { $dlg.Owner = $OwnerWin; if ($null -ne $OwnerWin.Icon) { $dlg.Icon = $OwnerWin.Icon } }
+    $dlg = $null
+    try {
+        $dlg = [Windows.Markup.XamlReader]::Load($dr)
+    } finally {
+        $dr.Close()
+    }
+    if ($null -ne $OwnerWin) { try { $dlg.Owner = $OwnerWin; if ($null -ne $OwnerWin.Icon) { $dlg.Icon = $OwnerWin.Icon } } catch { $dlg.WindowStartupLocation = 'CenterScreen' } }
 
     $dlg.Add_SourceInitialized({
         try {
             $hwnd = (New-Object System.Windows.Interop.WindowInteropHelper($dlg)).Handle
             $dark = 1
             [WinDwmHelper]::DwmSetWindowAttribute($hwnd, 20, [ref]$dark, 4) | Out-Null
-            $capColor = 0x00141611
+            $capColor = 0x00161312
             [WinDwmHelper]::DwmSetWindowAttribute($hwnd, 35, [ref]$capColor, 4) | Out-Null
         } catch {}
     })
@@ -245,17 +284,30 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
     $BtnDlgClose       = $dlg.FindName('BtnDlgClose')
     $BtnDlgApply       = $dlg.FindName('BtnDlgApply')
 
+    $getMtimeUtc = {
+        param([string]$Path)
+        try {
+            if (Test-Path -LiteralPath $Path) {
+                return [System.IO.File]::GetLastWriteTimeUtc($Path)
+            }
+        } catch {}
+        return [DateTime]::MinValue
+    }
+
     $state = [PSCustomObject]@{
-        Tab     = if ($InitialTab -eq 'exclude') { 'exclude' } elseif ($InitialTab -eq 'auto') { 'auto' } else { 'general' }
-        Changed = $false
-        AutoChanged = $false
-        Applied = $false
-        GenList = New-Object System.Collections.Generic.List[string]
-        ExList  = New-Object System.Collections.Generic.List[string]
-        GenHdr  = New-Object System.Collections.Generic.List[string]
-        ExHdr   = New-Object System.Collections.Generic.List[string]
-        AutoList = New-Object System.Collections.Generic.List[string]
-        AutoHdr  = New-Object System.Collections.Generic.List[string]
+        Tab          = if ($InitialTab -eq 'exclude') { 'exclude' } elseif ($InitialTab -eq 'auto') { 'auto' } else { 'general' }
+        Changed      = $false
+        AutoChanged  = $false
+        Applied      = $false
+        GenList      = New-Object System.Collections.Generic.List[string]
+        ExList       = New-Object System.Collections.Generic.List[string]
+        GenHdr       = New-Object System.Collections.Generic.List[string]
+        ExHdr        = New-Object System.Collections.Generic.List[string]
+        AutoList     = New-Object System.Collections.Generic.List[string]
+        AutoHdr      = New-Object System.Collections.Generic.List[string]
+        GenMtimeUtc  = [DateTime]::MinValue
+        ExMtimeUtc   = [DateTime]::MinValue
+        AutoMtimeUtc = [DateTime]::MinValue
     }
 
     $loadFile = {
@@ -272,9 +324,16 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
             }
         }
     }
-    & $loadFile $genPath $state.GenList $state.GenHdr
-    & $loadFile $exPath  $state.ExList  $state.ExHdr
-    & $loadFile $autoPath $state.AutoList $state.AutoHdr
+
+    $reloadAllFromDisk = {
+        & $loadFile $genPath  $state.GenList  $state.GenHdr
+        & $loadFile $exPath   $state.ExList   $state.ExHdr
+        & $loadFile $autoPath $state.AutoList $state.AutoHdr
+        $state.GenMtimeUtc  = & $getMtimeUtc $genPath
+        $state.ExMtimeUtc   = & $getMtimeUtc $exPath
+        $state.AutoMtimeUtc = & $getMtimeUtc $autoPath
+    }
+    & $reloadAllFromDisk
 
     $bc = New-Object System.Windows.Media.BrushConverter
     $renderTab = {
@@ -305,33 +364,59 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
         $TxtDlgEmpty.Visibility = if ($cur.Count -eq 0) { 'Visible' } else { 'Collapsed' }
     }
 
+    $getExternallyModifiedFiles = {
+        $changed = New-Object System.Collections.Generic.List[string]
+        if ((& $getMtimeUtc $genPath)  -gt $state.GenMtimeUtc)  { $changed.Add('list-general-user.txt') }
+        if ((& $getMtimeUtc $exPath)   -gt $state.ExMtimeUtc)   { $changed.Add('list-exclude-user.txt') }
+        if ($state.AutoChanged -and ((& $getMtimeUtc $autoPath) -gt $state.AutoMtimeUtc)) { $changed.Add('list-auto.txt') }
+        return $changed
+    }
+
     $saveBoth = {
-        $gOut = New-Object System.Collections.Generic.List[string]
-        if ($state.GenHdr.Count -gt 0) { foreach ($h in $state.GenHdr) { $gOut.Add($h) } } else { $gOut.Add('# Свои домены для обхода (по одному в строке)') }
-        foreach ($d in $state.GenList) { $gOut.Add($d) }
-        [System.IO.File]::WriteAllLines($genPath, $gOut, $utf8NoBom)
+        try {
+            $gOut = New-Object System.Collections.Generic.List[string]
+            if ($state.GenHdr.Count -gt 0) { foreach ($h in $state.GenHdr) { $gOut.Add($h) } } else { $gOut.Add('# Свои домены для обхода (по одному в строке)') }
+            foreach ($d in $state.GenList) { $gOut.Add($d) }
+            [System.IO.File]::WriteAllLines($genPath, $gOut, $utf8NoBom)
+            $state.GenMtimeUtc = & $getMtimeUtc $genPath
 
-        $eOut = New-Object System.Collections.Generic.List[string]
-        if ($state.ExHdr.Count -gt 0) { foreach ($h in $state.ExHdr) { $eOut.Add($h) } } else { $eOut.Add('# Исключения (по одному домену в строке)') }
-        foreach ($d in $state.ExList) { $eOut.Add($d) }
-        [System.IO.File]::WriteAllLines($exPath, $eOut, $utf8NoBom)
+            $eOut = New-Object System.Collections.Generic.List[string]
+            if ($state.ExHdr.Count -gt 0) { foreach ($h in $state.ExHdr) { $eOut.Add($h) } } else { $eOut.Add('# Исключения (по одному домену в строке)') }
+            foreach ($d in $state.ExList) { $eOut.Add($d) }
+            [System.IO.File]::WriteAllLines($exPath, $eOut, $utf8NoBom)
+            $state.ExMtimeUtc = & $getMtimeUtc $exPath
 
-        if ($state.AutoChanged) {
-            $aOut = New-Object System.Collections.Generic.List[string]
-            foreach ($h in $state.AutoHdr) { $aOut.Add($h) }
-            foreach ($d in $state.AutoList) { $aOut.Add($d) }
-            [System.IO.File]::WriteAllLines($autoPath, $aOut, $utf8NoBom)
+            if ($state.AutoChanged) {
+                $aOut = New-Object System.Collections.Generic.List[string]
+                foreach ($h in $state.AutoHdr) { $aOut.Add($h) }
+                foreach ($d in $state.AutoList) { $aOut.Add($d) }
+                [System.IO.File]::WriteAllLines($autoPath, $aOut, $utf8NoBom)
+                $state.AutoMtimeUtc = & $getMtimeUtc $autoPath
+                $state.AutoChanged = $false
+            }
+            return $true
+        } catch {
+            if (Get-Command Show-Z2MessageDialog -ErrorAction SilentlyContinue) {
+                [void](Show-Z2MessageDialog -Owner $dlg -Title 'Ошибка сохранения' -Message "Не удалось сохранить файлы списков:`n$($_.Exception.Message)" -Kind Error -Buttons OK -AccentHex $accent)
+            }
+            return $false
         }
     }
 
     $addDomainAction = {
-        $norm = Normalize-Z2Domain $TxtDlgDomain.Text
-        if (-not $norm) {
-            $TxtDlgHint.Text = 'Введи корректный домен или ссылку, например: site.com или https://www.site.com/path'
+        $rawText = $TxtDlgDomain.Text
+        if ($state.Tab -eq 'exclude' -and -not [string]::IsNullOrWhiteSpace($rawText) -and $rawText.Trim().StartsWith('!')) {
+            $TxtDlgHint.Text = "Во вкладке исключений символ '!' не используется — введи просто домен (например: site.com)."
             $TxtDlgHint.Foreground = $bc.ConvertFromString('#D9B066')
             return
         }
-        $cur = if ($state.Tab -eq 'general') { $state.GenList } else { $state.ExList }
+        $norm = Normalize-Z2Domain $rawText ($state.Tab -ne 'exclude')
+        if (-not $norm) {
+            $TxtDlgHint.Text = 'Введи корректный домен или ссылку (без IP и числового TLD), например: site.com или https://www.site.com/path'
+            $TxtDlgHint.Foreground = $bc.ConvertFromString('#D9B066')
+            return
+        }
+        if ($state.Tab -eq 'general') { $cur = $state.GenList } else { $cur = $state.ExList }
         $exists = $false
         foreach ($item in $cur) { if ($item -ieq $norm) { $exists = $true; break } }
         if ($exists) {
@@ -343,7 +428,7 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
         $state.Changed = $true
         $TxtDlgDomain.Text = ''
         $TxtDlgHint.Text = "Добавлен: $norm"
-        $TxtDlgHint.Foreground = $bc.ConvertFromString('#7BC4A4')
+        $TxtDlgHint.Foreground = $bc.ConvertFromString($accent)
         & $renderTab
     }
 
@@ -376,7 +461,7 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
         $btn = $e.OriginalSource -as [System.Windows.Controls.Button]
         if ($null -ne $btn -and $null -ne $btn.Tag) {
             $dom = [string]$btn.Tag
-            $cur = if ($state.Tab -eq 'general') { $state.GenList } elseif ($state.Tab -eq 'exclude') { $state.ExList } else { $state.AutoList }
+            if ($state.Tab -eq 'general') { $cur = $state.GenList } elseif ($state.Tab -eq 'exclude') { $cur = $state.ExList } else { $cur = $state.AutoList }
             if ($cur.Remove($dom)) {
                 $state.Changed = $true
                 if ($state.Tab -eq 'auto') { $state.AutoChanged = $true }
@@ -388,24 +473,59 @@ function Show-Z2ListsDialog([string]$Root, $OwnerWin, [string]$InitialTab = 'gen
     })
 
     $BtnDlgOpenTxt.Add_Click({
-        if ($state.Changed) { & $saveBoth }
+        if ($state.Changed) {
+            $extChanged = & $getExternallyModifiedFiles
+            if ($extChanged.Count -eq 0) {
+                if (& $saveBoth) { $state.Changed = $false }
+            }
+        }
         $fp = if ($state.Tab -eq 'general') { $genPath } elseif ($state.Tab -eq 'exclude') { $exPath } else { $autoPath }
-        Start-Process notepad.exe -ArgumentList "`"$fp`""
+        try {
+            Start-Process notepad.exe -ArgumentList "`"$fp`""
+        } catch {
+            if (Get-Command Show-Z2MessageDialog -ErrorAction SilentlyContinue) {
+                [void](Show-Z2MessageDialog -Owner $dlg -Title 'Ошибка' -Message "Не удалось открыть файл в Блокноте:`n$($_.Exception.Message)" -Kind Error -Buttons OK -AccentHex $accent)
+            }
+        }
     })
 
     $applyAndRestart = {
-        & $saveBoth
+        $extChanged = & $getExternallyModifiedFiles
+        if ($extChanged.Count -gt 0) {
+            $names = $extChanged -join ', '
+            $choice = 'Yes'
+            if (Get-Command Show-Z2MessageDialog -ErrorAction SilentlyContinue) {
+                $choice = Show-Z2MessageDialog -Owner $dlg -Title 'Файл изменён в Блокноте' -Message "Файл(ы) $names были изменены вне окна программы.`n`nПеречитать изменения с диска, чтобы не затереть правки из Блокнота (Да), или перезаписать их текущим списком из окна (Нет)?" -Kind Warning -Buttons YesNo -AccentHex $accent
+            }
+            if ($choice -eq 'Yes') {
+                & $reloadAllFromDisk
+                $state.Changed = $false
+                $state.AutoChanged = $false
+                $TxtDlgHint.Text = 'Списки перечитаны с диска (правки из Блокнота сохранены). Нажми «Применить» ещё раз для синхронизации.'
+                $TxtDlgHint.Foreground = $bc.ConvertFromString($accent)
+                & $renderTab
+                return $false
+            }
+        }
+
+        if (-not (& $saveBoth)) { return $false }
+        $syncScript = Join-Path $Root 'utils\sync_lists.ps1'
+        if (Test-Path -LiteralPath $syncScript) {
+            try { & $syncScript -Root $Root } catch {}
+        }
         $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
         if ($null -ne $svc -and $svc.Status -eq 'Running') {
             Restart-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
         }
         $state.Applied = $true
         $state.Changed = $false
+        return $true
     }
 
     $BtnDlgApply.Add_Click({
-        & $applyAndRestart
-        $dlg.Close()
+        if (& $applyAndRestart) {
+            $dlg.Close()
+        }
     })
     $BtnDlgClose.Add_Click({ $dlg.Close() })
 

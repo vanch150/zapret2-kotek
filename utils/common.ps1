@@ -12,7 +12,7 @@ function Get-Z2Version([string]$Root) {
         $v = (Get-Content -LiteralPath $vf -TotalCount 1 -ErrorAction SilentlyContinue)
         if ($v) { return $v.Trim() }
     }
-    return '1.0.0'
+    return '1.0.9'
 }
 
 function Get-Z2Repo([string]$Root) {
@@ -88,10 +88,12 @@ function Set-Z2IpsetMode([string]$Root, [string]$Mode) {
     } elseif ($Mode -eq 'any') {
         [System.IO.File]::WriteAllText($ipFile, '', $utf8NoBom)
     } elseif ($Mode -eq 'loaded') {
-        if (Test-Path -LiteralPath $bakFile) {
-            Copy-Item -LiteralPath $bakFile -Destination $ipFile -Force -ErrorAction SilentlyContinue
-        } elseif ($curMode -ne 'loaded') {
-            return $false
+        if ($curMode -ne 'loaded') {
+            if (Test-Path -LiteralPath $bakFile) {
+                Copy-Item -LiteralPath $bakFile -Destination $ipFile -Force -ErrorAction SilentlyContinue
+            } else {
+                return $false
+            }
         }
     }
     $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
@@ -172,4 +174,160 @@ function Register-Z2UninstallEntry([string]$Root) {
         New-ItemProperty -Path $regKey -Name 'NoRepair'      -Value 1 -PropertyType DWord -Force | Out-Null
         New-ItemProperty -Path $regKey -Name 'EstimatedSize' -Value 12288 -PropertyType DWord -Force | Out-Null
     } catch {}
+}
+
+function Register-Z2TrayStartupTask([string]$Root) {
+    try {
+        $rootClean = $Root.Trim('"', "'").TrimEnd('\', '/') + '\'
+        $guiScript = Join-Path $rootClean 'utils\gui_app.ps1'
+        if (-not (Test-Path -LiteralPath $guiScript)) { return $false }
+        $psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+        $rootNoSlash = $rootClean.TrimEnd('\')
+        $taskArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File `"$guiScript`" -Root `"$rootNoSlash`" -StartInTray"
+
+        $sched = New-Object -ComObject 'Schedule.Service'
+        $sched.Connect()
+        $folder = $sched.GetFolder('\')
+        $td = $sched.NewTask(0)
+        $td.RegistrationInfo.Description = 'Zapret2 Kotek — тихий запуск иконки в трее при входе в Windows (без UAC)'
+        $td.RegistrationInfo.Author = 'Zapret2 Kotek'
+        $td.Principal.LogonType = 3
+        $td.Principal.RunLevel  = 1
+        $td.Settings.Enabled = $true
+        $td.Settings.Hidden  = $false
+        $td.Settings.DisallowStartIfOnBatteries = $false
+        $td.Settings.StopIfGoingOnBatteries     = $false
+        $td.Settings.ExecutionTimeLimit         = 'PT0S'
+        $td.Settings.MultipleInstances          = 2
+        $td.Settings.AllowDemandStart           = $true
+
+        $trig = $td.Triggers.Create(9)
+        $trig.Enabled = $true
+        $trig.Delay   = 'PT5S'
+
+        $act = $td.Actions.Create(0)
+        $act.Path             = $psExe
+        $act.Arguments        = $taskArgs
+        $act.WorkingDirectory = $rootClean.TrimEnd('\')
+
+        $folder.RegisterTaskDefinition('Zapret2KotekTray', $td, 6, $null, $null, 3, $null) | Out-Null
+        return $true
+    } catch { return $false }
+}
+
+function Unregister-Z2TrayStartupTask {
+    try {
+        $sched = New-Object -ComObject 'Schedule.Service'
+        $sched.Connect()
+        $folder = $sched.GetFolder('\')
+        $folder.DeleteTask('Zapret2KotekTray', 0)
+    } catch {}
+    try { & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN 'Zapret2KotekTray' /F >$null 2>&1 } catch {}
+}
+function Test-Z2IsAdmin {
+    try {
+        $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+        $pr = New-Object Security.Principal.WindowsPrincipal($id)
+        return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    } catch { return $false }
+}
+
+function Stop-Z2ServiceAndProcess {
+    param(
+        [string]$ServiceName = 'zapret',
+        [int]$ServiceTimeoutSec = 5,
+        [int]$ProcessTimeoutMs = 3000
+    )
+    $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+    if ($null -ne $svc) {
+        try {
+            if ($svc.Status -ne [System.ServiceProcess.ServiceControllerStatus]::Stopped) {
+                try {
+                    if ($svc.Status -ne [System.ServiceProcess.ServiceControllerStatus]::StopPending) {
+                        $svc.Stop()
+                    }
+                } catch {}
+                try {
+                    $svc.WaitForStatus(
+                        [System.ServiceProcess.ServiceControllerStatus]::Stopped,
+                        [TimeSpan]::FromSeconds($ServiceTimeoutSec)
+                    )
+                } catch {}
+            }
+        } finally {
+            try { $svc.Dispose() } catch {}
+        }
+    }
+    foreach ($pn in @('winws2', 'winws')) {
+        $procs = @(Get-Process -Name $pn -ErrorAction SilentlyContinue)
+        foreach ($p in $procs) {
+            try {
+                if (-not $p.HasExited) {
+                    $p.Kill()
+                    [void]$p.WaitForExit($ProcessTimeoutMs)
+                }
+            } catch {}
+        }
+    }
+}
+function Get-Z2Targets {
+    param(
+        [string]$Root = '',
+        [ValidateSet('CORE', 'ALL')]
+        [string]$Mode = 'CORE'
+    )
+    $list = New-Object System.Collections.Generic.List[object]
+    $tFile = Join-Path (Resolve-Z2Root $Root) 'utils\targets.txt'
+    if (Test-Path -LiteralPath $tFile) {
+        foreach ($tl in (Get-Content -LiteralPath $tFile -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+            $tt = $tl.Trim()
+            if (-not $tt -or $tt.StartsWith('#')) { continue }
+            $tp = $tt -split '\|'
+            if ($tp.Count -ge 3) {
+                $cat  = $tp[0].Trim().ToUpperInvariant()
+                $tmod = $tp[1].Trim().ToUpperInvariant()
+                $url  = $tp[2].Trim()
+                if ($url -and ($Mode -eq 'ALL' -or $tmod -eq 'CORE')) {
+                    $list.Add([PSCustomObject]@{ Cat = $cat; Mode = $tmod; Url = $url })
+                }
+            }
+        }
+    }
+    if ($list.Count -eq 0) {
+        $fallback = @(
+            @{ Cat='YT';  Mode='CORE'; Url='https://www.youtube.com' },
+            @{ Cat='YT';  Mode='CORE'; Url='https://i.ytimg.com/favicon.ico' },
+            @{ Cat='YT';  Mode='CORE'; Url='https://yt3.ggpht.com' },
+            @{ Cat='YT';  Mode='CORE'; Url='https://jnn-pa.googleapis.com' },
+            @{ Cat='YT';  Mode='CORE'; Url='https://redirector.googlevideo.com' },
+            @{ Cat='YT';  Mode='EXT';  Url='https://m.youtube.com' },
+            @{ Cat='YT';  Mode='EXT';  Url='https://play.google.com' },
+            @{ Cat='DC';  Mode='CORE'; Url='https://discord.com' },
+            @{ Cat='DC';  Mode='CORE'; Url='https://discord.com/api/v10/gateway' },
+            @{ Cat='DC';  Mode='CORE'; Url='https://cdn.discordapp.com' },
+            @{ Cat='DC';  Mode='CORE'; Url='https://discord.gg' },
+            @{ Cat='DC';  Mode='EXT';  Url='https://media.discordapp.net' },
+            @{ Cat='DC';  Mode='EXT';  Url='https://status.discord.com' },
+            @{ Cat='TG';  Mode='EXT';  Url='https://web.telegram.org' },
+            @{ Cat='TG';  Mode='EXT';  Url='https://t.me' },
+            @{ Cat='WEB'; Mode='CORE'; Url='https://cloudflare-dns.com' },
+            @{ Cat='WEB'; Mode='CORE'; Url='https://one.one.one.one' },
+            @{ Cat='WEB'; Mode='CORE'; Url='https://speed.cloudflare.com/__down?bytes=65536' },
+            @{ Cat='WEB'; Mode='CORE'; Url='https://7tv.io' },
+            @{ Cat='WEB'; Mode='CORE'; Url='https://cdn.7tv.app' },
+            @{ Cat='WEB'; Mode='CORE'; Url='https://betterttv.net' },
+            @{ Cat='WEB'; Mode='CORE'; Url='https://frankerfacez.com' },
+            @{ Cat='WEB'; Mode='CORE'; Url='https://raw.githubusercontent.com' },
+            @{ Cat='WEB'; Mode='EXT';  Url='https://github.com' },
+            @{ Cat='WEB'; Mode='EXT';  Url='https://soundcloud.com' },
+            @{ Cat='WEB'; Mode='EXT';  Url='https://rutracker.org' },
+            @{ Cat='WEB'; Mode='EXT';  Url='https://ntc.party' }
+        )
+        foreach ($fb in $fallback) {
+            if ($Mode -eq 'ALL' -or $fb.Mode -eq 'CORE') {
+                $list.Add([PSCustomObject]$fb)
+            }
+        }
+    }
+    return $list.ToArray()
 }

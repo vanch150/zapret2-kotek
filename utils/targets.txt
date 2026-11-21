@@ -1,7 +1,7 @@
 # Единый список целей для AUTO_SETUP, быстрого теста (Проверить) и DEEP_OPTIMIZE
 # Формат: КАТЕГОРИЯ|РЕЖИМ|URL
 #   КАТЕГОРИЯ: YT (YouTube/Google), DC (Discord), TG (Telegram), WEB (Прочие сайты)
-#   РЕЖИМ    : CORE (участвует везде: 16 целей без IP-заблокированного TG), EXT (только в DEEP_OPTIMIZE: +14 = 30 целей)
+#   РЕЖИМ    : CORE (участвует везде: 17 целей без IP-заблокированного TG), EXT (только в DEEP_OPTIMIZE: +10 = 27 целей)
 #   Файл сохраняется при автообновлении (self_update.ps1) — можно добавлять свои URL.
 
 # --- YouTube / Google ---
@@ -25,19 +25,16 @@ DC|EXT|https://status.discord.com
 TG|EXT|https://web.telegram.org
 TG|EXT|https://t.me
 
-# --- Web / Cloudflare / Streaming / Gaming ---
+# --- Web / Cloudflare / Streaming ---
 WEB|CORE|https://cloudflare-dns.com
 WEB|CORE|https://one.one.one.one
 WEB|CORE|https://speed.cloudflare.com/__down?bytes=65536
 WEB|CORE|https://7tv.io
+WEB|CORE|https://cdn.7tv.app
 WEB|CORE|https://betterttv.net
 WEB|CORE|https://frankerfacez.com
 WEB|CORE|https://raw.githubusercontent.com
 WEB|EXT|https://github.com
-WEB|EXT|https://store.steampowered.com
-WEB|EXT|https://steamcommunity.com
-WEB|EXT|https://www.twitch.tv
-WEB|EXT|https://gql.twitch.tv
 WEB|EXT|https://soundcloud.com
 WEB|EXT|https://rutracker.org
 WEB|EXT|https://ntc.party

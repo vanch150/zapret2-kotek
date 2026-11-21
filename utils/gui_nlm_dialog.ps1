@@ -1,12 +1,43 @@
 ﻿# Zapret2 Kotek — Per-VPN NLM Exclusion Selector (utils/gui_nlm_dialog.ps1)
 
 function Get-Z2NlmNetworks([string]$Root) {
-    try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
     $winwsExe = Join-Path $Root 'bin\winws2.exe'
     $list = New-Object System.Collections.Generic.List[object]
     if (-not (Test-Path -LiteralPath $winwsExe)) { return $list }
-    $vpnRx = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|TAP|TUN|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Radmin|Hamachi|ZeroTier|Tailscale|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
-    $rawOut = & $winwsExe '--nlm-list=all' 2>$null
+    $vpnRx = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|\b(TAP|TUN)\b|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Radmin|Hamachi|ZeroTier|Tailscale|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName               = $winwsExe
+    $psi.Arguments              = '--nlm-list=all'
+    $psi.WorkingDirectory       = $Root
+    $psi.UseShellExecute        = $false
+    $psi.CreateNoWindow         = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError  = $true
+    $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+
+    $rawText = ''
+    $proc = $null
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        if ($null -ne $proc) {
+            $outTask = $proc.StandardOutput.ReadToEndAsync()
+            $errTask = $proc.StandardError.ReadToEndAsync()
+            if (-not $proc.WaitForExit(10000)) {
+                try { $proc.Kill() } catch {}
+            }
+            try { if ($outTask.Wait(1000)) { $rawText = [string]$outTask.Result } } catch {}
+            try { [void]$errTask.Wait(1000) } catch {}
+        }
+    } catch {
+        $rawText = ''
+    } finally {
+        if ($null -ne $proc) {
+            try { $proc.Dispose() } catch {}
+        }
+    }
+
+    $rawOut = $rawText -split '\r?\n'
     $seen = New-Object System.Collections.Generic.HashSet[string] ([StringComparer]::OrdinalIgnoreCase)
     $curName = ''
     foreach ($line in $rawOut) {
@@ -28,9 +59,16 @@ function Get-Z2NlmNetworks([string]$Root) {
     return $list
 }
 
-function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#9FC7B8') {
+function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4A4') {
+    if (-not (Get-Command Show-Z2MessageDialog -ErrorAction SilentlyContinue)) {
+        $msgDlgPath = Join-Path $Root 'utils\gui_msg_dialog.ps1'
+        if (Test-Path -LiteralPath $msgDlgPath) { . $msgDlgPath }
+    }
+
+    $accent    = if ($AccentHex -match '^#[0-9A-Fa-f]{6}$') { $AccentHex } else { '#7BC4A4' }
     $nlmFile   = Join-Path $Root 'utils\nlm_filter.enabled'
     $namesFile = Join-Path $Root 'utils\nlm_filter.names'
+    $autoFile  = Join-Path $Root 'utils\nlm_auto.enabled'
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
     $excludedSet = New-Object System.Collections.Generic.HashSet[string] ([StringComparer]::OrdinalIgnoreCase)
@@ -55,7 +93,7 @@ function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#9FC7B
         Background="#121316" Foreground="#D4D7DD" FontFamily="Segoe UI">
     <Window.Resources>
         <Style x:Key="NlmPrimaryBtn" TargetType="Button">
-            <Setter Property="Background" Value="#9FC7B8"/>
+            <Setter Property="Background" Value="__ACCENT__"/>
             <Setter Property="Foreground" Value="#121316"/>
             <Setter Property="BorderThickness" Value="0"/>
             <Setter Property="Padding" Value="14,8"/>
@@ -69,7 +107,7 @@ function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#9FC7B
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Background" Value="#B4D6C9"/></Trigger>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Opacity" Value="0.88"/></Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -96,6 +134,47 @@ function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#9FC7B
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="DarkCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#E5E7EB"/>
+            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="box" Grid.Column="0" Width="18" Height="18" CornerRadius="4"
+                                    Background="#181B22" BorderBrush="#3D4352" BorderThickness="1.5"
+                                    VerticalAlignment="Center" Margin="0,0,10,0">
+                                <Path x:Name="checkMark" Data="M 0,4.2 L 3.2,7.4 L 9.4,0.8" Width="10" Height="8.5" Stretch="Uniform"
+                                      Stroke="#111316" StrokeThickness="2.1"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                      Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ContentPresenter Grid.Column="1" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="box" Property="BorderBrush" Value="__ACCENT__"/>
+                                <Setter TargetName="box" Property="Background" Value="#20242E"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="box" Property="Background" Value="__ACCENT__"/>
+                                <Setter TargetName="box" Property="BorderBrush" Value="__ACCENT__"/>
+                                <Setter TargetName="checkMark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
     <Grid Margin="18,16">
         <Grid.RowDefinitions>
@@ -108,7 +187,7 @@ function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#9FC7B
             <TextBlock Text="Какие VPN исключить из обхода Zapret2?" FontSize="15" FontWeight="SemiBold" Foreground="#F1F3F5"/>
             <TextBlock Text="Отметь галочкой VPN, которым Zapret не должен мешать. Сними галочку (например, с ExitLag), если хочешь гнать этот адаптер через обход." FontSize="12" Foreground="#9CA3AF" Margin="0,4,0,0" TextWrapping="Wrap"/>
         </StackPanel>
-        <CheckBox x:Name="ChkShowAllNets" Grid.Row="1" Content="Показать все сети Windows (не только VPN)" Foreground="#9CA3AF" FontSize="12" Margin="0,0,0,10" Cursor="Hand"/>
+        <CheckBox x:Name="ChkShowAllNets" Grid.Row="1" Content="Показать все сети Windows (не только VPN)" Style="{StaticResource DarkCheckBox}" Foreground="#9CA3AF" FontSize="12.5" Margin="0,0,0,10"/>
         <Border Grid.Row="2" Background="#1A1C21" BorderBrush="#282C34" BorderThickness="1" CornerRadius="8" Padding="8">
             <Grid>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -133,17 +212,22 @@ function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#9FC7B
 </Window>
 '@
 
-    if ($AccentHex -match '^#[0-9A-Fa-f]{6}$') { $dlgXaml = $dlgXaml.Replace('#9FC7B8', $AccentHex) }
+    $dlgXaml = $dlgXaml.Replace('__ACCENT__', $accent)
     [xml]$dx = $dlgXaml
     $dr = New-Object System.Xml.XmlNodeReader $dx
-    $dlg = [Windows.Markup.XamlReader]::Load($dr)
-    if ($null -ne $OwnerWin) { $dlg.Owner = $OwnerWin; if ($null -ne $OwnerWin.Icon) { $dlg.Icon = $OwnerWin.Icon } }
+    $dlg = $null
+    try {
+        $dlg = [Windows.Markup.XamlReader]::Load($dr)
+    } finally {
+        $dr.Close()
+    }
+    if ($null -ne $OwnerWin) { try { $dlg.Owner = $OwnerWin; if ($null -ne $OwnerWin.Icon) { $dlg.Icon = $OwnerWin.Icon } } catch { $dlg.WindowStartupLocation = 'CenterScreen' } }
     $dlg.Add_SourceInitialized({
         try {
             $hwnd = (New-Object System.Windows.Interop.WindowInteropHelper($dlg)).Handle
             $dark = 1
             [WinDwmHelper]::DwmSetWindowAttribute($hwnd, 20, [ref]$dark, 4) | Out-Null
-            $capColor = 0x00141611
+            $capColor = 0x00161312
             [WinDwmHelper]::DwmSetWindowAttribute($hwnd, 35, [ref]$capColor, 4) | Out-Null
         } catch {}
     })
@@ -169,6 +253,7 @@ function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#9FC7B
             if (-not $showAll -and -not $n.IsVpn -and -not $checkMap[$n.NetId]) { continue }
             $visible++
             $cb = New-Object System.Windows.Controls.CheckBox
+            $cb.Style = $dlg.Resources['DarkCheckBox']
             $cb.IsChecked = [bool]$checkMap[$n.NetId]
             $cb.Tag = $n.NetId
             $cb.Margin = New-Object System.Windows.Thickness(4, 5, 4, 5)
@@ -202,7 +287,7 @@ function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#9FC7B
         & $renderList
     })
 
-    $script:NlmDialogSaved = $false
+    $nlmState = [PSCustomObject]@{ Saved = $false }
     $BtnNlmCancel.Add_Click({ $dlg.Close() })
     $BtnNlmSave.Add_Click({
         $selGuids = New-Object System.Collections.Generic.List[string]
@@ -213,18 +298,25 @@ function Show-Z2NlmDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#9FC7B
                 $selNames.Add($n.Name)
             }
         }
-        if ($selGuids.Count -gt 0) {
-            [System.IO.File]::WriteAllText($nlmFile, ('NEG:' + ($selGuids -join ',')), $utf8NoBom)
-            [System.IO.File]::WriteAllText($namesFile, ($selNames -join ', '), $utf8NoBom)
-        } else {
-            if (Test-Path -LiteralPath $nlmFile)   { Remove-Item -LiteralPath $nlmFile -Force -ErrorAction SilentlyContinue }
-            if (Test-Path -LiteralPath $namesFile) { Remove-Item -LiteralPath $namesFile -Force -ErrorAction SilentlyContinue }
+        try {
+            if (Test-Path -LiteralPath $autoFile) { Remove-Item -LiteralPath $autoFile -Force -ErrorAction SilentlyContinue }
+            if ($selGuids.Count -gt 0) {
+                [System.IO.File]::WriteAllText($nlmFile, ('NEG:' + ($selGuids -join ',')), $utf8NoBom)
+                [System.IO.File]::WriteAllText($namesFile, ($selNames -join ', '), $utf8NoBom)
+            } else {
+                if (Test-Path -LiteralPath $nlmFile)   { Remove-Item -LiteralPath $nlmFile -Force -ErrorAction SilentlyContinue }
+                if (Test-Path -LiteralPath $namesFile) { Remove-Item -LiteralPath $namesFile -Force -ErrorAction SilentlyContinue }
+            }
+            $nlmState.Saved = $true
+            $dlg.Close()
+        } catch {
+            if (Get-Command Show-Z2MessageDialog -ErrorAction SilentlyContinue) {
+                [void](Show-Z2MessageDialog -Owner $dlg -Title 'Ошибка сохранения' -Message "Не удалось сохранить настройки NLM:`n$($_.Exception.Message)" -Kind Error -Buttons OK -AccentHex $accent)
+            }
         }
-        $script:NlmDialogSaved = $true
-        $dlg.Close()
     })
 
     & $renderList
     [void]$dlg.ShowDialog()
-    return $script:NlmDialogSaved
+    return $nlmState.Saved
 }

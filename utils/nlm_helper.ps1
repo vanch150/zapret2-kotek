@@ -11,8 +11,8 @@ try { $Root = [System.IO.Path]::GetFullPath($Root.Trim('"', "'")).TrimEnd('\', '
 $NlmFile     = Join-Path $Root 'utils\nlm_filter.enabled'
 $NlmAutoFile = Join-Path $Root 'utils\nlm_auto.enabled'
 $NamesFile   = Join-Path $Root 'utils\nlm_filter.names'
-$WarpFlag = Join-Path $Root 'utils\warp_unblock.enabled'
-$WinwsExe = Join-Path $Root 'bin\winws2.exe'
+$WarpFlag    = Join-Path $Root 'utils\warp_unblock.enabled'
+$WinwsExe    = Join-Path $Root 'bin\winws2.exe'
 
 function Get-WarpState {
     if (Test-Path -LiteralPath $WarpFlag) { return 'ВКЛ (UDP 500, 1701, 2408, 4500 активны)' }
@@ -27,46 +27,75 @@ function Get-NlmState {
     return 'все сети'
 }
 
-$VpnRxCommon = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|TAP|TUN|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Radmin|Hamachi|ZeroTier|Tailscale|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
+$VpnRxCommon = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|\b(TAP|TUN)\b|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Radmin|Hamachi|ZeroTier|Tailscale|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
+$GuidRxStrict = '^!?\{[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\}$'
 
-if ($Action -eq 'auto') {
+function Invoke-NlmAutoExclude {
     if (-not (Test-Path -LiteralPath $WinwsExe)) {
-        Write-Host '[X] bin\winws2.exe не найден.'
-        exit 1
+        Write-Host '[X] bin\winws2.exe не найден.' -ForegroundColor Red
+        return $false
     }
-    [IO.File]::WriteAllText($NlmAutoFile, '1', (New-Object System.Text.UTF8Encoding $false))
-    $rawOut = & $WinwsExe '--nlm-list=all' 2>$null
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    $global:LASTEXITCODE = 0
+    $rawOut = @(& $WinwsExe '--nlm-list=all' 2>$null)
+    if ($LASTEXITCODE -ne 0 -or $rawOut.Count -eq 0) {
+        Write-Host '[!] Не удалось прочитать список сетей NLM (winws2 --nlm-list=all) — текущий фильтр сохранён.' -ForegroundColor Yellow
+        return $false
+    }
+    [IO.File]::WriteAllText($NlmAutoFile, '1', $utf8NoBom)
     $vpnGuids = New-Object System.Collections.Generic.List[string]
     $vpnNames = New-Object System.Collections.Generic.List[string]
     $curName = ''
+    $curGid  = ''
     foreach ($line in $rawOut) {
-        if ($line -match '^Name\s*:\s*(.+)$') { $curName = $matches[1].Trim() }
-        elseif ($line -match '^NetID\s*:\s*(\S+)') {
-            if ($curName -and ($curName -match $VpnRxCommon)) {
-                $gid = $matches[1].Trim()
-                if (-not $vpnGuids.Contains($gid)) { $vpnGuids.Add($gid); $vpnNames.Add($curName) }
+        if ($line -match '^Name\s*:\s*(.+)$') {
+            $curName = $matches[1].Trim()
+            $curGid  = ''
+        } elseif ($line -match '^NetID\s*:\s*(\S+)') {
+            $curGid = $matches[1].Trim()
+            if ($curName -and ($curName -match $VpnRxCommon) -and -not $vpnGuids.Contains($curGid)) {
+                $vpnGuids.Add($curGid)
+                $vpnNames.Add($curName)
             }
-            $curName = ''
+        } elseif ($line -match '^Adapter\s*:\s*(.+)$') {
+            $curAd = $matches[1].Trim()
+            if ($curGid -and ($curAd -match $VpnRxCommon) -and -not $vpnGuids.Contains($curGid)) {
+                $vpnGuids.Add($curGid)
+                $vpnNames.Add($(if ($curName) { "$curName ($curAd)" } else { $curAd }))
+            }
         }
     }
     if ($vpnGuids.Count -gt 0) {
         $val = 'NEG:' + ($vpnGuids -join ',')
-        [IO.File]::WriteAllText($NlmFile, $val, (New-Object System.Text.UTF8Encoding $false))
-        [IO.File]::WriteAllText($NamesFile, ($vpnNames -join ', '), (New-Object System.Text.UTF8Encoding $false))
-        Write-Host "[OK] NLM-фильтр (инверсия): исключены VPN-адаптеры ($($vpnGuids.Count)); все физ. сети и новые Wi-Fi активны."
-        exit 0
+        [IO.File]::WriteAllText($NlmFile, $val, $utf8NoBom)
+        [IO.File]::WriteAllText($NamesFile, ($vpnNames -join ', '), $utf8NoBom)
+        Write-Host "[OK] NLM-фильтр (инверсия): исключены VPN-адаптеры ($($vpnGuids.Count)); все физ. сети и новые Wi-Fi активны." -ForegroundColor Green
     } else {
         if (Test-Path -LiteralPath $NlmFile) { Remove-Item -LiteralPath $NlmFile -Force -ErrorAction SilentlyContinue }
         if (Test-Path -LiteralPath $NamesFile) { Remove-Item -LiteralPath $NamesFile -Force -ErrorAction SilentlyContinue }
-        Write-Host '[OK] Авто-исключение VPN активно (сейчас активных VPN-адаптеров не найдено; новые VPN будут исключаться автоматически).'
-        exit 0
+        Write-Host '[OK] Авто-исключение VPN активно (сейчас активных VPN-адаптеров не найдено; новые VPN будут исключаться автоматически).' -ForegroundColor Green
     }
+    return $true
 }
-if ($Action -eq 'clear') {
+
+function Clear-NlmFilter {
     if (Test-Path -LiteralPath $NlmAutoFile) { Remove-Item -LiteralPath $NlmAutoFile -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $NlmFile) { Remove-Item -LiteralPath $NlmFile -Force -ErrorAction SilentlyContinue }
     if (Test-Path -LiteralPath $NamesFile) { Remove-Item -LiteralPath $NamesFile -Force -ErrorAction SilentlyContinue }
+}
+
+if ($Action -eq 'auto') {
+    if (Invoke-NlmAutoExclude) { exit 0 } else { exit 1 }
+}
+if ($Action -eq 'clear') {
+    Clear-NlmFilter
     Write-Host '[OK] NLM-фильтр отключён (активны все сети)'
+    exit 0
+}
+if ($Action -eq 'reset') {
+    [IO.File]::WriteAllText($WarpFlag, "1`n")
+    Clear-NlmFilter
+    Write-Host '[OK] Сброс выполнен: WARP ВКЛ, активны все сети.'
     exit 0
 }
 
@@ -100,40 +129,31 @@ while ($true) {
     }
     elseif ($ch -eq '2') {
         Write-Host "`n  [*] Сканирование профилей сетей Windows NLM..." -ForegroundColor Cyan
-        $vpnRx = $VpnRxCommon
-        $rawOut = & $WinwsExe '--nlm-list=all' 2>$null
-        $vpnGuids = New-Object System.Collections.Generic.List[string]
-        $curName = ''
-        foreach ($line in $rawOut) {
-            if ($line -match '^Name\s*:\s*(.+)$') { $curName = $matches[1].Trim() }
-            elseif ($line -match '^NetID\s*:\s*(\S+)' -and $curName -and ($curName -match $vpnRx)) {
-                $gid = $matches[1].Trim()
-                if (-not $vpnGuids.Contains($gid)) { $vpnGuids.Add($gid) }
-            }
-        }
-        if ($vpnGuids.Count -gt 0) {
-            $val = 'NEG:' + ($vpnGuids -join ',')
-            [IO.File]::WriteAllText($NlmFile, $val, (New-Object System.Text.UTF8Encoding $false))
-            Write-Host "  [OK] Исключены VPN-адаптеры (--nlm-filter-neg=1): $val" -ForegroundColor Green
+        if (Invoke-NlmAutoExclude) {
             exit 10
         } else {
-            if (Test-Path -LiteralPath $NlmFile) { Remove-Item -LiteralPath $NlmFile -Force -ErrorAction SilentlyContinue }
-            Write-Host '  [ИНФО] VPN-адаптеры не найдены — фильтр не ставится, все сети и новые Wi-Fi работают без ограничений.' -ForegroundColor Green
-            exit 10
+            Read-Host '  Нажмите Enter для продолжения...' | Out-Null
         }
     }
     elseif ($ch -eq '3') {
         Write-Host "`n  --- winws2.exe --nlm-list=all ---" -ForegroundColor Cyan
         & $WinwsExe '--nlm-list=all'
-        $val = Read-Host "`n  Введите NetID GUID или имя сети (например !WARP, или пусто для отмены)"
+        $val = Read-Host "`n  Введите NetID в формате {GUID} или !{GUID} (пусто для отмены)"
         if (-not [string]::IsNullOrWhiteSpace($val)) {
-            [IO.File]::WriteAllText($NlmFile, $val.Trim(), (New-Object System.Text.UTF8Encoding $false))
-            exit 10
+            $trimmed = $val.Trim()
+            if ($trimmed -match $GuidRxStrict) {
+                Clear-NlmFilter
+                [IO.File]::WriteAllText($NlmFile, $trimmed, (New-Object System.Text.UTF8Encoding($false)))
+                exit 10
+            } else {
+                Write-Host '  [!] Неверный формат. Введите строго {GUID} или !{GUID}, например !{12345678-1234-1234-1234-1234567890AB}.' -ForegroundColor Red
+                Read-Host '  Нажмите Enter для продолжения...' | Out-Null
+            }
         }
     }
     elseif ($ch -eq '4') {
         [IO.File]::WriteAllText($WarpFlag, "1`n")
-        Remove-Item -LiteralPath $NlmFile -Force -ErrorAction SilentlyContinue
+        Clear-NlmFilter
         Write-Host "`n  [OK] Сброс выполнен: WARP ВКЛ, активны все сети." -ForegroundColor Green
         exit 10
     }

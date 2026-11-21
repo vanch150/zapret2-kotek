@@ -4,9 +4,10 @@
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'SilentlyContinue'
-if (-not $Root) { $Root = $env:Z2_ROOT }
-if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
-$Root = $Root.Trim('"', "'", '\', '/') + '\'
+
+$commonPath = Join-Path $PSScriptRoot 'common.ps1'
+if (Test-Path -LiteralPath $commonPath) { . $commonPath }
+$Root = Resolve-Z2Root $Root
 $BinDir = Join-Path $Root 'bin'
 $LuaDir = Join-Path $Root 'lua'
 $WinwsExe = Join-Path $BinDir 'winws2.exe'
@@ -95,29 +96,9 @@ function Invoke-AutoPickUdpFake {
 
     $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
     $wasRunning = ($null -ne $svc -and $svc.Status -eq 'Running')
-    if ($wasRunning) {
-        Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Milliseconds 300
-    }
-    Get-Process -Name 'winws2' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 200
+    Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
 
-    $stunIps = Resolve-StunIpv4Targets
-
-    # Baseline check without winws2
-    $baseHits = 0; $baseRttSum = 0
-    foreach ($ip in $stunIps) {
-        $rb = Test-StunIpv4 $ip 19302 650
-        if ($rb.Ok) { $baseHits++; $baseRttSum += $rb.RttMs }
-    }
-    if ($baseHits -gt 0) {
-        $avgBase = [int]($baseRttSum / $baseHits)
-        Write-Host ("        [БАЗА] Без winws2: STUN доступен ({0}/{1}, ~{2} мс)" -f $baseHits, $stunIps.Count, $avgBase) -ForegroundColor DarkGray
-    } else {
-        Write-Host ("        [БАЗА] Без winws2: STUN заблокирован ТСПУ (0/{0}) — проверяем обход..." -f $stunIps.Count) -ForegroundColor Yellow
-    }
-
-    $tmpConf = Join-Path $env:TEMP 'z2_udp_bench_$PID.conf'
+    $tmpConf = Join-Path $env:TEMP "z2_udp_bench_$PID.conf"
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $luaSlash = $LuaDir.Replace('\', '/')
     $q = [char]34
@@ -126,67 +107,95 @@ function Invoke-AutoPickUdpFake {
     $bestHits = -1
     $bestRtt = 99999
 
-    foreach ($item in $Curated) {
-        $fPath = Join-Path $BinDir $item.File
-        if (-not (Test-Path -LiteralPath $fPath)) { continue }
+    try {
+        $stunIps = Resolve-StunIpv4Targets
 
-        $blobSlash = $fPath.Replace('\', '/')
-        $confLines = @(
-            '--wf-udp-out=19294-19344',
-            ($q + "--lua-init=@$luaSlash/zapret-lib.lua" + $q),
-            ($q + "--lua-init=@$luaSlash/zapret-antidpi.lua" + $q),
-            ($q + "--blob=test_udp:@$blobSlash" + $q),
-            '--filter-udp=19294-19344',
-            '--filter-l7=stun',
-            '--payload=stun',
-            '--lua-desync=fake:blob=test_udp:repeats=6'
-        )
-        [System.IO.File]::WriteAllLines($tmpConf, $confLines, $utf8NoBom)
-
-        $proc = $null
-        try {
-            $proc = Start-Process -FilePath $WinwsExe -ArgumentList "@`"$tmpConf`"" -WorkingDirectory $BinDir -WindowStyle Hidden -PassThru
-        } catch {}
-        Start-Sleep -Milliseconds 350
-
-        $hits = 0; $rttSum = 0
+        # Baseline check without winws2
+        $baseHits = 0; $baseRttSum = 0
         foreach ($ip in $stunIps) {
-            $r = Test-StunIpv4 $ip 19302 700
-            if ($r.Ok) { $hits++; $rttSum += $r.RttMs }
+            $rb = Test-StunIpv4 $ip 19302 650
+            if ($rb.Ok) { $baseHits++; $baseRttSum += $rb.RttMs }
         }
-
-        if ($proc -and -not $proc.HasExited) {
-            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        }
-        Get-Process -Name 'winws2' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-        Start-Sleep -Milliseconds 120
-
-        if ($hits -gt 0) {
-            $avgRtt = [int]($rttSum / $hits)
-            Write-Host ("        - {0,-38} : OK {1}/{2} ({3} мс)" -f $item.File, $hits, $stunIps.Count, $avgRtt) -ForegroundColor Green
-            if (($hits -gt $bestHits) -or ($hits -eq $bestHits -and ($avgRtt + 15) -lt $bestRtt)) {
-                $bestHits = $hits
-                $bestRtt = $avgRtt
-                $bestFile = $item.File
-            }
+        $probeRounds = 1
+        if ($baseHits -gt 0) {
+            $avgBase = [int]($baseRttSum / $baseHits)
+            $probeRounds = 3
+            Write-Host ("        [БАЗА] Без winws2: STUN доступен ({0}/{1}, ~{2} мс)" -f $baseHits, $stunIps.Count, $avgBase) -ForegroundColor DarkGray
+            Write-Host "        [ИНФО] STUN :19302 не заблокирован провайдером — делаем по 3 замера для сглаживания RTT." -ForegroundColor Yellow
         } else {
-            Write-Host ("        - {0,-38} : нет ответа (0/{1})" -f $item.File, $stunIps.Count) -ForegroundColor DarkGray
+            Write-Host ("        [БАЗА] Без winws2: STUN заблокирован ТСПУ (0/{0}) — проверяем обход..." -f $stunIps.Count) -ForegroundColor Yellow
         }
-    }
+        $totalProbes = $stunIps.Count * $probeRounds
 
-    if (Test-Path -LiteralPath $tmpConf) { Remove-Item -LiteralPath $tmpConf -Force -ErrorAction SilentlyContinue }
+        foreach ($item in $Curated) {
+            $fPath = Join-Path $BinDir $item.File
+            if (-not (Test-Path -LiteralPath $fPath)) { continue }
 
-    if ($bestHits -le 0) {
-        $bestFile = 'quic_initial_www_google_com.bin'
-        Write-Host "        [ИНФО] STUN :19302 недоступен ни с одним фейком -> выбран универсальный Google QUIC." -ForegroundColor Yellow
-    }
+            $blobSlash = $fPath.Replace('\', '/')
+            $confLines = @(
+                '--wf-udp-out=19294-19344',
+                ($q + "--lua-init=@$luaSlash/zapret-lib.lua" + $q),
+                ($q + "--lua-init=@$luaSlash/zapret-antidpi.lua" + $q),
+                ($q + "--blob=test_udp:@$blobSlash" + $q),
+                '--filter-udp=19294-19344',
+                '--filter-l7=stun',
+                '--payload=stun',
+                '--lua-desync=fake:blob=test_udp:repeats=6'
+            )
+            [System.IO.File]::WriteAllLines($tmpConf, $confLines, $utf8NoBom)
 
-    Set-ActiveUdpFake $bestFile | Out-Null
-    Write-Host "        [OK] Выбран лучший UDP-фейк: $bestFile" -ForegroundColor Green
-    Write-Host "        [OK] Обновлены bin\ACTIVE_DISCORD_UDP.bin и bin\ACTIVE_GAME_UDP.bin" -ForegroundColor DarkGray
+            $proc = $null
+            try {
+                $proc = Start-Process -FilePath $WinwsExe -ArgumentList "@`"$tmpConf`"" -WorkingDirectory $BinDir -WindowStyle Hidden -PassThru
+            } catch {}
+            Start-Sleep -Milliseconds 350
 
-    if ($wasRunning) {
-        Start-Service -Name 'zapret' -ErrorAction SilentlyContinue
+            if ($null -eq $proc -or $proc.HasExited) {
+                Write-Host ("        - {0,-38} : [X] winws2.exe упал при старте" -f $item.File) -ForegroundColor Red
+                Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
+                continue
+            }
+
+            $hits = 0; $rttSum = 0
+            for ($rd = 0; $rd -lt $probeRounds; $rd++) {
+                foreach ($ip in $stunIps) {
+                    $r = Test-StunIpv4 $ip 19302 700
+                    if ($r.Ok) { $hits++; $rttSum += $r.RttMs }
+                }
+            }
+
+            if ($proc -and -not $proc.HasExited) {
+                try { $proc.Kill(); [void]$proc.WaitForExit(3000) } catch {}
+            }
+            Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
+
+            if ($hits -gt 0) {
+                $avgRtt = [int]($rttSum / $hits)
+                Write-Host ("        - {0,-38} : OK {1}/{2} ({3} мс)" -f $item.File, $hits, $totalProbes, $avgRtt) -ForegroundColor Green
+                if (($hits -gt $bestHits) -or ($hits -eq $bestHits -and ($avgRtt + 15) -lt $bestRtt)) {
+                    $bestHits = $hits
+                    $bestRtt = $avgRtt
+                    $bestFile = $item.File
+                }
+            } else {
+                Write-Host ("        - {0,-38} : нет ответа (0/{1})" -f $item.File, $totalProbes) -ForegroundColor DarkGray
+            }
+        }
+
+        if ($bestHits -le 0) {
+            $bestFile = 'quic_initial_www_google_com.bin'
+            Write-Host "        [ИНФО] STUN :19302 недоступен ни с одним фейком -> выбран универсальный Google QUIC." -ForegroundColor Yellow
+        }
+
+        Set-ActiveUdpFake $bestFile | Out-Null
+        Write-Host "        [OK] Выбран лучший UDP-фейк: $bestFile" -ForegroundColor Green
+        Write-Host "        [OK] Обновлены bin\ACTIVE_DISCORD_UDP.bin и bin\ACTIVE_GAME_UDP.bin" -ForegroundColor DarkGray
+    } finally {
+        Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
+        if (Test-Path -LiteralPath $tmpConf) { Remove-Item -LiteralPath $tmpConf -Force -ErrorAction SilentlyContinue }
+        if ($wasRunning) {
+            Start-Service -Name 'zapret' -ErrorAction SilentlyContinue
+        }
     }
 }
 

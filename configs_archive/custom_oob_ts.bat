@@ -3,7 +3,9 @@ chcp 65001 > nul
 :: Experimental: TCP Out-Of-Band (oob urgent pointer from SYN) + Timestamp Fake
 :: Note: oob requires --wf-tcp-empty=1 and a SYN-matching profile (ipset-all without --filter-l7/--hostlist)
 
-cd /d "%~dp0..\"
+set "ROOT=%~dp0"
+if exist "%~dp0..\utils\service.bat" set "ROOT=%~dp0..\"
+cd /d "%ROOT%"
 call "%ROOT%utils\service.bat" status_zapret
 call "%ROOT%utils\service.bat" check_updates
 call "%ROOT%utils\service.bat" load_game_filter
@@ -13,7 +15,6 @@ echo:
 chcp 65001 > nul
 if not defined GameFilterTCP set "GameFilterTCP=12"
 if not defined GameFilterUDP set "GameFilterUDP=12"
-set "ROOT=%~dp0..\"
 set "BIN=%ROOT%bin\"
 set "LISTS=%ROOT%lists\"
 set "LUA=%ROOT%lua\"
@@ -32,6 +33,6 @@ start "zapret2: %~n0" /min "%BIN%winws2.exe" --wf-tcp-empty=1 --wf-tcp-in=80,443
 --filter-udp=500,1701,2408,4500 --filter-l7=wireguard,stun,unknown --out-range=-d4 --payload=wireguard_initiation,wireguard_keepalive,stun,unknown --lua-desync=fake:blob=wg_init:payload=all:repeats=6 --new ^
 --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --out-range=-d4 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6 --new ^
 --filter-udp=443 --filter-l7=quic --ipset="%LISTS%ipset-all.txt" --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d10 --payload=quic_initial --lua-desync=fake:blob=quic_google:repeats=6 --new ^
---filter-tcp=80,443,2053,2083,2087,2096,8443 --ipset="%LISTS%ipset-all.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --in-range=-s1 --out-range=-d10 --payload=empty,tls_client_hello,http_req --lua-desync=oob:urp=e --payload=tls_client_hello --lua-desync=fake:blob=tls_max:tcp_ts=-600000:repeats=4 --new ^
+--filter-tcp=80,443,2053,2083,2087,2096,8443 --ipset="%LISTS%ipset-all.txt" --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --in-range=-s1 --out-range=-d10 --payload=empty,tls_client_hello,http_req --lua-desync=oob:urp=e --payload=tls_client_hello --lua-desync=fake:blob=tls_max:tcp_ts=-600000:repeats=4 --new ^
 --filter-tcp=%GameFilterTCP% --ipset="%LISTS%ipset-all.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d4 --payload=known,unknown --lua-desync=multisplit:pos=1:seqovl=664:seqovl_pattern=tls_max:payload=all --new ^
 --filter-udp=%GameFilterUDP% --ipset="%LISTS%ipset-all.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d3 --payload=known,unknown --lua-desync=fake:blob=game_udp:payload=all:repeats=6

@@ -16,6 +16,80 @@ using System.Threading.Tasks;
 
 namespace ZapretTgWsProxy
 {
+    internal static class ThreadSafeRng
+    {
+        [ThreadStatic]
+        private static RandomNumberGenerator _rng;
+
+        public static void GetBytes(byte[] buffer)
+        {
+            RandomNumberGenerator r = _rng;
+            if (r == null)
+            {
+                r = RandomNumberGenerator.Create();
+                _rng = r;
+            }
+            r.GetBytes(buffer);
+        }
+    }
+
+    internal static class TaskTimeoutHelper
+    {
+        public static void ObserveExceptions(Task task)
+        {
+            if (task == null) return;
+            task.ContinueWith(delegate(Task t)
+            {
+                if (t.Exception != null)
+                {
+                    GC.KeepAlive(t.Exception);
+                }
+            }, TaskContinuationOptions.OnlyOnFaulted);
+        }
+
+        public static async Task WaitWithTimeoutAsync(Task task, int timeoutMs, string timeoutMessage, Action onTimeout)
+        {
+            if (timeoutMs < 1) timeoutMs = 1;
+            using (CancellationTokenSource cts = new CancellationTokenSource())
+            {
+                Task delayTask = Task.Delay(timeoutMs, cts.Token);
+                Task completed = await Task.WhenAny(task, delayTask).ConfigureAwait(false);
+                if (completed != task)
+                {
+                    ObserveExceptions(task);
+                    if (onTimeout != null)
+                    {
+                        try { onTimeout(); } catch { }
+                    }
+                    throw new System.TimeoutException(timeoutMessage);
+                }
+                cts.Cancel();
+            }
+            await task.ConfigureAwait(false);
+        }
+
+        public static async Task<T> WaitWithTimeoutAsync<T>(Task<T> task, int timeoutMs, string timeoutMessage, Action onTimeout)
+        {
+            if (timeoutMs < 1) timeoutMs = 1;
+            using (CancellationTokenSource cts = new CancellationTokenSource())
+            {
+                Task delayTask = Task.Delay(timeoutMs, cts.Token);
+                Task completed = await Task.WhenAny(task, delayTask).ConfigureAwait(false);
+                if (completed != task)
+                {
+                    ObserveExceptions(task);
+                    if (onTimeout != null)
+                    {
+                        try { onTimeout(); } catch { }
+                    }
+                    throw new System.TimeoutException(timeoutMessage);
+                }
+                cts.Cancel();
+            }
+            return await task.ConfigureAwait(false);
+        }
+    }
+
     internal sealed class AesCtrCipher : IDisposable
     {
         private readonly Aes _aes;
@@ -38,10 +112,10 @@ namespace ZapretTgWsProxy
             _ksIndex = 16;
         }
 
-        public byte[] Update(byte[] data, int offset, int length)
+        public void UpdateInPlace(byte[] data, int offset, int length)
         {
-            byte[] output = new byte[length];
-            for (int i = 0; i < length; i++)
+            int end = offset + length;
+            for (int i = offset; i < end; i++)
             {
                 if (_ksIndex >= 16)
                 {
@@ -53,8 +127,15 @@ namespace ZapretTgWsProxy
                     }
                     _ksIndex = 0;
                 }
-                output[i] = (byte)(data[offset + i] ^ _keystream[_ksIndex++]);
+                data[i] = (byte)(data[i] ^ _keystream[_ksIndex++]);
             }
+        }
+
+        public byte[] Update(byte[] data, int offset, int length)
+        {
+            byte[] output = new byte[length];
+            Buffer.BlockCopy(data, offset, output, 0, length);
+            UpdateInPlace(output, 0, length);
             return output;
         }
 
@@ -89,11 +170,12 @@ namespace ZapretTgWsProxy
         }
     }
 
-    internal sealed class MsgSplitter
+    internal sealed class MsgSplitter : IDisposable
     {
+        private const int ShrinkThresholdBytes = 262144;
         private readonly uint _proto;
-        private readonly MemoryStream _cipherBuf = new MemoryStream();
-        private readonly MemoryStream _plainBuf = new MemoryStream();
+        private MemoryStream _cipherBuf = new MemoryStream();
+        private MemoryStream _plainBuf = new MemoryStream();
         private bool _disabled;
 
         public const uint PROTO_ABRIDGED = 0xEFEFEFEF;
@@ -104,6 +186,20 @@ namespace ZapretTgWsProxy
         {
             _proto = proto;
             _disabled = false;
+        }
+
+        private void MaybeShrink()
+        {
+            if (_cipherBuf.Length == 0 && _cipherBuf.Capacity > ShrinkThresholdBytes)
+            {
+                _cipherBuf.Dispose();
+                _cipherBuf = new MemoryStream();
+            }
+            if (_plainBuf.Length == 0 && _plainBuf.Capacity > ShrinkThresholdBytes)
+            {
+                _plainBuf.Dispose();
+                _plainBuf = new MemoryStream();
+            }
         }
 
         public List<byte[]> Split(byte[] cipherChunk, byte[] plainChunk)
@@ -150,19 +246,22 @@ namespace ZapretTgWsProxy
             if (offset > 0)
             {
                 int remaining = bufLen - offset;
-                byte[] newC = new byte[remaining];
-                byte[] newP = new byte[remaining];
                 if (remaining > 0)
                 {
+                    byte[] newC = new byte[remaining];
+                    byte[] newP = new byte[remaining];
                     Buffer.BlockCopy(cArr, offset, newC, 0, remaining);
                     Buffer.BlockCopy(pArr, offset, newP, 0, remaining);
-                }
-                _cipherBuf.SetLength(0);
-                _plainBuf.SetLength(0);
-                if (remaining > 0)
-                {
+                    _cipherBuf.SetLength(0);
+                    _plainBuf.SetLength(0);
                     _cipherBuf.Write(newC, 0, remaining);
                     _plainBuf.Write(newP, 0, remaining);
+                }
+                else
+                {
+                    _cipherBuf.SetLength(0);
+                    _plainBuf.SetLength(0);
+                    MaybeShrink();
                 }
             }
             return parts;
@@ -175,6 +274,7 @@ namespace ZapretTgWsProxy
             byte[] tail = _cipherBuf.ToArray();
             _cipherBuf.SetLength(0);
             _plainBuf.SetLength(0);
+            MaybeShrink();
             return tail;
         }
 
@@ -217,6 +317,12 @@ namespace ZapretTgWsProxy
             }
             return 0;
         }
+
+        public void Dispose()
+        {
+            try { _cipherBuf.Dispose(); } catch { }
+            try { _plainBuf.Dispose(); } catch { }
+        }
     }
 
     internal sealed class CfRouteSpec
@@ -224,7 +330,7 @@ namespace ZapretTgWsProxy
         public readonly string TargetHost; // Clean Anycast IP or null for DNS host
         public readonly int Port;
         public readonly bool Secure;
-        public readonly string SniOverride; // null = use Host header, or e.g. "cdnjs.cloudflare.com"
+        public readonly string SniOverride; // null = use Host header
         public readonly string BaseDomain;
         public readonly string Label;
 
@@ -241,15 +347,34 @@ namespace ZapretTgWsProxy
 
     internal sealed class RawWebSocket : IDisposable
     {
+        private const int WriteTimeoutMs = 30000;
+        private static volatile bool _tls13Supported = true;
+
         private readonly TcpClient _tcp;
         private readonly Stream _stream;
         private readonly SemaphoreSlim _writeLock = new SemaphoreSlim(1, 1);
-        private readonly MemoryStream _frag = new MemoryStream();
+        private MemoryStream _frag = new MemoryStream();
+        private bool _inFrag;
         private volatile bool _closed;
+        private int _disposed;
         public readonly DateTime CreatedUtc;
         public readonly string RouteLabel;
 
-        private static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
+        internal static void EnableTcpKeepAlive(TcpClient tcp)
+        {
+            if (tcp == null) return;
+            try
+            {
+                Socket s = tcp.Client;
+                if (s == null) return;
+                byte[] inOptionValues = new byte[12];
+                BitConverter.GetBytes((uint)1).CopyTo(inOptionValues, 0);
+                BitConverter.GetBytes((uint)30000).CopyTo(inOptionValues, 4);
+                BitConverter.GetBytes((uint)10000).CopyTo(inOptionValues, 8);
+                s.IOControl(IOControlCode.KeepAliveValues, inOptionValues, null);
+            }
+            catch { }
+        }
 
         private RawWebSocket(TcpClient tcp, Stream stream, string routeLabel)
         {
@@ -290,56 +415,74 @@ namespace ZapretTgWsProxy
                 tcp.NoDelay = true;
                 tcp.ReceiveBufferSize = bufferSize;
                 tcp.SendBufferSize = bufferSize;
+                EnableTcpKeepAlive(tcp);
 
-                using (CancellationTokenSource connCts = new CancellationTokenSource())
-                {
-                    Task connTask = tcp.ConnectAsync(targetHost, port);
-                    Task delayTask = Task.Delay(timeoutMs, connCts.Token);
-                    Task completed = await Task.WhenAny(connTask, delayTask).ConfigureAwait(false);
-                    if (completed != connTask)
-                    {
-                        tcp.Close();
-                        throw new System.TimeoutException("TCP connect timeout to " + targetHost + ":" + port);
-                    }
-                    connCts.Cancel();
-                    await connTask.ConfigureAwait(false);
-                }
+                TcpClient tcpToClose = tcp;
+                await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                    tcp.ConnectAsync(targetHost, port),
+                    timeoutMs,
+                    "TCP connect timeout to " + targetHost + ":" + port,
+                    delegate { tcpToClose.Close(); }).ConfigureAwait(false);
 
                 Stream netStream = tcp.GetStream();
                 if (secure)
                 {
+                    bool certValidationFailed = false;
                     SslStream ssl = new SslStream(netStream, false, delegate(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors errors)
                     {
-                        return errors == SslPolicyErrors.None;
+                        if (errors != SslPolicyErrors.None)
+                        {
+                            certValidationFailed = true;
+                            return false;
+                        }
+                        return true;
                     });
                     sslRef = ssl;
 
-                    SslProtocols protos = SslProtocols.Tls12 | (SslProtocols)0x3000;
+                    bool tryTls13 = _tls13Supported;
+                    SslProtocols protos = tryTls13 ? (SslProtocols.Tls12 | (SslProtocols)0x3000) : SslProtocols.Tls12;
                     bool fallbackTls12 = false;
                     bool needReconnect = false;
                     try
                     {
-                        using (CancellationTokenSource tlsCts = new CancellationTokenSource())
-                        {
-                            Task authTask = ssl.AuthenticateAsClientAsync(sniHost, null, protos, false);
-                            Task tlsDelay = Task.Delay(timeoutMs, tlsCts.Token);
-                            if (await Task.WhenAny(authTask, tlsDelay).ConfigureAwait(false) != authTask)
-                                throw new System.TimeoutException("TLS handshake timeout (" + sniHost + ")");
-                            tlsCts.Cancel();
-                            await authTask.ConfigureAwait(false);
-                        }
+                        TcpClient tlsClose1 = tcp;
+                        await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                            ssl.AuthenticateAsClientAsync(sniHost, null, protos, false),
+                            timeoutMs,
+                            "TLS handshake timeout (" + sniHost + ")",
+                            delegate { tlsClose1.Close(); }).ConfigureAwait(false);
                     }
                     catch (ArgumentException)
                     {
+                        if (!tryTls13) throw;
+                        _tls13Supported = false;
                         fallbackTls12 = true;
                     }
-                    catch (System.ComponentModel.Win32Exception)
+                    catch (NotSupportedException)
                     {
+                        if (!tryTls13) throw;
+                        _tls13Supported = false;
+                        fallbackTls12 = true;
+                    }
+                    catch (System.ComponentModel.Win32Exception wex)
+                    {
+                        if (!tryTls13 || certValidationFailed || (wex is SocketException)) throw;
+                        _tls13Supported = false;
+                        fallbackTls12 = true;
+                        needReconnect = true;
+                    }
+                    catch (IOException ioEx)
+                    {
+                        if (!tryTls13 || certValidationFailed || !(ioEx.InnerException is System.ComponentModel.Win32Exception) || (ioEx.InnerException is SocketException))
+                            throw;
+                        _tls13Supported = false;
                         fallbackTls12 = true;
                         needReconnect = true;
                     }
                     catch (System.Security.Authentication.AuthenticationException)
                     {
+                        if (!tryTls13 || certValidationFailed) throw;
+                        _tls13Supported = false;
                         fallbackTls12 = true;
                         needReconnect = true;
                     }
@@ -353,18 +496,13 @@ namespace ZapretTgWsProxy
                             tcp.NoDelay = true;
                             tcp.ReceiveBufferSize = bufferSize;
                             tcp.SendBufferSize = bufferSize;
-                            using (CancellationTokenSource rCts = new CancellationTokenSource())
-                            {
-                                Task rConn = tcp.ConnectAsync(targetHost, port);
-                                Task rDelay = Task.Delay(timeoutMs, rCts.Token);
-                                if (await Task.WhenAny(rConn, rDelay).ConfigureAwait(false) != rConn)
-                                {
-                                    tcp.Close();
-                                    throw new System.TimeoutException("TCP reconnect timeout to " + targetHost + ":" + port);
-                                }
-                                rCts.Cancel();
-                                await rConn.ConfigureAwait(false);
-                            }
+                            EnableTcpKeepAlive(tcp);
+                            TcpClient tcpReconnect = tcp;
+                            await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                                tcp.ConnectAsync(targetHost, port),
+                                timeoutMs,
+                                "TCP reconnect timeout to " + targetHost + ":" + port,
+                                delegate { tcpReconnect.Close(); }).ConfigureAwait(false);
                             netStream = tcp.GetStream();
                             ssl = new SslStream(netStream, false, delegate(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors errors)
                             {
@@ -372,22 +510,19 @@ namespace ZapretTgWsProxy
                             });
                             sslRef = ssl;
                         }
-                        using (CancellationTokenSource tlsCts2 = new CancellationTokenSource())
-                        {
-                            Task authTask2 = ssl.AuthenticateAsClientAsync(sniHost, null, SslProtocols.Tls12, false);
-                            Task tlsDelay2 = Task.Delay(timeoutMs, tlsCts2.Token);
-                            if (await Task.WhenAny(authTask2, tlsDelay2).ConfigureAwait(false) != authTask2)
-                                throw new System.TimeoutException("TLS 1.2 handshake timeout (" + sniHost + ")");
-                            tlsCts2.Cancel();
-                            await authTask2.ConfigureAwait(false);
-                        }
+                        TcpClient tlsClose2 = tcp;
+                        await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                            ssl.AuthenticateAsClientAsync(sniHost, null, SslProtocols.Tls12, false),
+                            timeoutMs,
+                            "TLS 1.2 handshake timeout (" + sniHost + ")",
+                            delegate { tlsClose2.Close(); }).ConfigureAwait(false);
                     }
                     sslRef = ssl;
                     netStream = ssl;
                 }
 
                 byte[] keyBytes = new byte[16];
-                Rng.GetBytes(keyBytes);
+                ThreadSafeRng.GetBytes(keyBytes);
                 string wsKey = Convert.ToBase64String(keyBytes);
 
                 string safePath = (path ?? "/apiws").Replace("\r", "").Replace("\n", "");
@@ -402,11 +537,27 @@ namespace ZapretTgWsProxy
                     "Sec-WebSocket-Protocol: binary\r\n" +
                     "User-Agent: Mozilla/5.0\r\n\r\n";
 
+                Stopwatch hsSw = Stopwatch.StartNew();
+                TcpClient hsTcp = tcp;
                 byte[] reqBytes = Encoding.ASCII.GetBytes(req);
-                await netStream.WriteAsync(reqBytes, 0, reqBytes.Length).ConfigureAwait(false);
-                await netStream.FlushAsync().ConfigureAwait(false);
+                await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                    netStream.WriteAsync(reqBytes, 0, reqBytes.Length),
+                    timeoutMs,
+                    "WS upgrade write timeout",
+                    delegate { hsTcp.Close(); }).ConfigureAwait(false);
+                int flushRemain = timeoutMs - (int)hsSw.ElapsedMilliseconds;
+                if (flushRemain <= 0)
+                    throw new System.TimeoutException("WS upgrade handshake deadline exceeded");
+                await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                    netStream.FlushAsync(),
+                    flushRemain,
+                    "WS upgrade flush timeout",
+                    delegate { hsTcp.Close(); }).ConfigureAwait(false);
 
-                string statusLine = await ReadLineAsciiAsync(netStream, timeoutMs).ConfigureAwait(false);
+                int statusRemain = timeoutMs - (int)hsSw.ElapsedMilliseconds;
+                if (statusRemain <= 0)
+                    throw new System.TimeoutException("WS upgrade handshake deadline exceeded");
+                string statusLine = await ReadLineAsciiAsync(netStream, statusRemain).ConfigureAwait(false);
                 if (string.IsNullOrEmpty(statusLine))
                     throw new IOException("Empty WS upgrade response from " + targetHost + ":" + port);
 
@@ -416,14 +567,19 @@ namespace ZapretTgWsProxy
                 {
                     if (++hdrCount > 64)
                         throw new IOException("WS upgrade: too many response headers");
-                    string hdrLine = await ReadLineAsciiAsync(netStream, timeoutMs).ConfigureAwait(false);
-                    if (string.IsNullOrEmpty(hdrLine))
+                    int hdrRemain = timeoutMs - (int)hsSw.ElapsedMilliseconds;
+                    if (hdrRemain <= 0)
+                        throw new System.TimeoutException("WS upgrade handshake deadline exceeded");
+                    string hdrLine = await ReadLineAsciiAsync(netStream, hdrRemain).ConfigureAwait(false);
+                    if (hdrLine == null)
+                        throw new EndOfStreamException("WS upgrade handshake truncated (EOF)");
+                    if (hdrLine.Length == 0)
                         break;
                     if (hdrLine.StartsWith("Sec-WebSocket-Accept:", StringComparison.OrdinalIgnoreCase))
                         acceptHeader = hdrLine.Substring(21).Trim();
                 }
 
-                if (!statusLine.Contains(" 101 "))
+                if (!statusLine.StartsWith("HTTP/1.1 101", StringComparison.OrdinalIgnoreCase))
                     throw new IOException("WS upgrade rejected (" + statusLine + ")");
 
                 string expectedAccept;
@@ -447,11 +603,13 @@ namespace ZapretTgWsProxy
 
         private static async Task<string> ReadLineAsciiAsync(Stream stream, int timeoutMs)
         {
+            if (timeoutMs < 1) timeoutMs = 1;
             using (MemoryStream ms = new MemoryStream(128))
             using (CancellationTokenSource cts = new CancellationTokenSource(timeoutMs))
             {
                 byte[] one = new byte[1];
                 Task timeoutTask = Task.Delay(Timeout.Infinite, cts.Token);
+                bool sawLf = false;
                 while (ms.Length < 8192)
                 {
                     Task<int> rt = stream.ReadAsync(one, 0, 1);
@@ -460,18 +618,23 @@ namespace ZapretTgWsProxy
                         Task done = await Task.WhenAny(rt, timeoutTask).ConfigureAwait(false);
                         if (done != rt)
                         {
-                            Task ignored = rt.ContinueWith(delegate(Task<int> t) { if (t.Exception != null) { } }, TaskContinuationOptions.OnlyOnFaulted);
+                            TaskTimeoutHelper.ObserveExceptions(rt);
                             throw new System.TimeoutException("WS header read timeout");
                         }
                     }
                     int n = await rt.ConfigureAwait(false);
                     if (n <= 0)
-                        break;
+                        return null;
                     if (one[0] == (byte)'\n')
+                    {
+                        sawLf = true;
                         break;
+                    }
                     if (one[0] != (byte)'\r')
                         ms.WriteByte(one[0]);
                 }
+                if (!sawLf)
+                    throw new IOException("WS response header line too long");
                 return Encoding.ASCII.GetString(ms.ToArray());
             }
         }
@@ -483,34 +646,55 @@ namespace ZapretTgWsProxy
             await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await _stream.WriteAsync(frame, 0, frame.Length).ConfigureAwait(false);
-                await _stream.FlushAsync().ConfigureAwait(false);
+                if (_closed) throw new ObjectDisposedException("RawWebSocket");
+                await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                    _stream.WriteAsync(frame, 0, frame.Length),
+                    WriteTimeoutMs,
+                    "WS write timeout",
+                    delegate { CloseTransport(); }).ConfigureAwait(false);
+                await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                    _stream.FlushAsync(),
+                    WriteTimeoutMs,
+                    "WS flush timeout",
+                    delegate { CloseTransport(); }).ConfigureAwait(false);
             }
             finally
             {
-                _writeLock.Release();
+                try { _writeLock.Release(); } catch { }
             }
         }
 
         public async Task SendBatchAsync(List<byte[]> parts)
         {
             if (_closed) throw new ObjectDisposedException("RawWebSocket");
-            MemoryStream batch = new MemoryStream();
-            for (int i = 0; i < parts.Count; i++)
+            byte[] all;
+            using (MemoryStream batch = new MemoryStream())
             {
-                byte[] f = BuildFrame(0x02, parts[i], 0, parts[i].Length);
-                batch.Write(f, 0, f.Length);
+                for (int i = 0; i < parts.Count; i++)
+                {
+                    byte[] f = BuildFrame(0x02, parts[i], 0, parts[i].Length);
+                    batch.Write(f, 0, f.Length);
+                }
+                all = batch.ToArray();
             }
-            byte[] all = batch.ToArray();
             await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await _stream.WriteAsync(all, 0, all.Length).ConfigureAwait(false);
-                await _stream.FlushAsync().ConfigureAwait(false);
+                if (_closed) throw new ObjectDisposedException("RawWebSocket");
+                await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                    _stream.WriteAsync(all, 0, all.Length),
+                    WriteTimeoutMs,
+                    "WS batch write timeout",
+                    delegate { CloseTransport(); }).ConfigureAwait(false);
+                await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                    _stream.FlushAsync(),
+                    WriteTimeoutMs,
+                    "WS batch flush timeout",
+                    delegate { CloseTransport(); }).ConfigureAwait(false);
             }
             finally
             {
-                _writeLock.Release();
+                try { _writeLock.Release(); } catch { }
             }
         }
 
@@ -541,6 +725,9 @@ namespace ZapretTgWsProxy
                         len = (len << 8) | ext8[i];
                 }
 
+                if (opcode >= 0x08 && (!fin || len > 125))
+                    throw new IOException("Invalid WS control frame (fin=" + fin + ", len=" + len + ")");
+
                 if (len < 0 || len > 16 * 1024 * 1024)
                     throw new IOException("WS frame too large: " + len);
 
@@ -570,8 +757,20 @@ namespace ZapretTgWsProxy
                     {
                         byte[] closeReply = BuildFrame(0x08, payload, 0, Math.Min(2, payload.Length));
                         await _writeLock.WaitAsync().ConfigureAwait(false);
-                        try { await _stream.WriteAsync(closeReply, 0, closeReply.Length).ConfigureAwait(false); }
-                        finally { _writeLock.Release(); }
+                        try
+                        {
+                            await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                                _stream.WriteAsync(closeReply, 0, closeReply.Length),
+                                WriteTimeoutMs,
+                                "WS control write timeout",
+                                delegate { CloseTransport(); }).ConfigureAwait(false);
+                            await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                                _stream.FlushAsync(),
+                                WriteTimeoutMs,
+                                "WS control flush timeout",
+                                delegate { CloseTransport(); }).ConfigureAwait(false);
+                        }
+                        finally { try { _writeLock.Release(); } catch { } }
                     }
                     catch { }
                     return null;
@@ -582,8 +781,20 @@ namespace ZapretTgWsProxy
                     {
                         byte[] pong = BuildFrame(0x0A, payload, 0, payload.Length);
                         await _writeLock.WaitAsync().ConfigureAwait(false);
-                        try { await _stream.WriteAsync(pong, 0, pong.Length).ConfigureAwait(false); }
-                        finally { _writeLock.Release(); }
+                        try
+                        {
+                            await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                                _stream.WriteAsync(pong, 0, pong.Length),
+                                WriteTimeoutMs,
+                                "WS control write timeout",
+                                delegate { CloseTransport(); }).ConfigureAwait(false);
+                            await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                                _stream.FlushAsync(),
+                                WriteTimeoutMs,
+                                "WS control flush timeout",
+                                delegate { CloseTransport(); }).ConfigureAwait(false);
+                        }
+                        finally { try { _writeLock.Release(); } catch { } }
                     }
                     catch { }
                     continue;
@@ -593,15 +804,30 @@ namespace ZapretTgWsProxy
 
                 if (opcode == 0x00 || opcode == 0x01 || opcode == 0x02)
                 {
-                    if (fin && _frag.Length == 0)
+                    if (opcode == 0x00 && !_inFrag)
+                        throw new IOException("Unexpected WS continuation frame");
+                    if ((opcode == 0x01 || opcode == 0x02) && _inFrag)
+                        throw new IOException("Unexpected WS data frame during fragmentation");
+
+                    if (fin && !_inFrag)
                         return payload;
-                    _frag.Write(payload, 0, payload.Length);
-                    if (_frag.Length > 16 * 1024 * 1024)
+                    _inFrag = true;
+                    if (_frag.Length + payload.Length > 16 * 1024 * 1024)
                         throw new IOException("WS fragmented message too large");
+                    _frag.Write(payload, 0, payload.Length);
                     if (!fin)
                         continue;
+                    _inFrag = false;
                     byte[] msg = _frag.ToArray();
-                    _frag.SetLength(0);
+                    if (_frag.Capacity > 262144)
+                    {
+                        try { _frag.Dispose(); } catch { }
+                        _frag = new MemoryStream();
+                    }
+                    else
+                    {
+                        _frag.SetLength(0);
+                    }
                     return msg;
                 }
             }
@@ -611,7 +837,7 @@ namespace ZapretTgWsProxy
         private static byte[] BuildFrame(byte opcode, byte[] data, int offset, int length)
         {
             byte[] maskKey = new byte[4];
-            Rng.GetBytes(maskKey);
+            ThreadSafeRng.GetBytes(maskKey);
 
             int hdrLen = length < 126 ? 6 : (length < 65536 ? 8 : 14);
             byte[] frame = new byte[hdrLen + length];
@@ -663,17 +889,28 @@ namespace ZapretTgWsProxy
             return buf;
         }
 
-        public void Dispose()
+        public void CloseTransport()
         {
             _closed = true;
             try { _stream.Close(); } catch { }
             try { _tcp.Close(); } catch { }
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            CloseTransport();
             try { _frag.Dispose(); } catch { }
+            try { _writeLock.Dispose(); } catch { }
         }
     }
 
     public sealed class TgWsProxyEngine
     {
+        private const int MaxConcurrentClients = 384;
+        private const int DirectCircuitBreakerThreshold = 3;
+
         public string Host = "127.0.0.1";
         public int Port = 1443;
         public string SecretHex = "";
@@ -687,6 +924,7 @@ namespace ZapretTgWsProxy
         public bool Verbose = false;
 
         public readonly ConcurrentDictionary<int, string> DcRedirects = new ConcurrentDictionary<int, string>();
+        private readonly HashSet<int> _userDcRedirects = new HashSet<int>();
         public readonly List<string> CfUserDomains = new List<string>();
         public readonly List<string> CfWorkerDomains = new List<string>();
 
@@ -715,8 +953,7 @@ namespace ZapretTgWsProxy
             "104.16.132.229",
             "104.17.24.14",
             "104.18.32.47",
-            "172.64.155.209",
-            "162.159.152.4"
+            "172.64.155.209"
         };
 
         private static readonly string[] DefaultCfDomains = new string[]
@@ -732,20 +969,98 @@ namespace ZapretTgWsProxy
         private readonly ConcurrentDictionary<string, ConcurrentQueue<RawWebSocket>> _wsPool = new ConcurrentDictionary<string, ConcurrentQueue<RawWebSocket>>();
         private readonly ConcurrentDictionary<int, ConcurrentQueue<RawWebSocket>> _cfPool = new ConcurrentDictionary<int, ConcurrentQueue<RawWebSocket>>();
         private readonly ConcurrentDictionary<string, int> _refilling = new ConcurrentDictionary<string, int>();
+        private readonly SemaphoreSlim _connSlots = new SemaphoreSlim(MaxConcurrentClients, MaxConcurrentClients);
         private readonly object _logLock = new object();
-        private static readonly RandomNumberGenerator Rng = RandomNumberGenerator.Create();
 
         // -1 = unknown, 0 = unreachable (circuit breaker open), 1 = reachable
         private volatile int _directWsState = -1;
+        private int _directFailStreak = 0;
         private volatile string _workingDirectIp = "149.154.167.220";
         private long _lastDirectProbeUtcMs = 0;
         private readonly SemaphoreSlim _directProbeLock = new SemaphoreSlim(1, 1);
 
-        private volatile CfRouteSpec _bestCfRoute = null;
+        private CfRouteSpec _bestCfRoute = null;
         private readonly SemaphoreSlim _cfProbeLock = new SemaphoreSlim(1, 1);
 
+        private readonly ConcurrentDictionary<TcpClient, byte> _activeClients = new ConcurrentDictionary<TcpClient, byte>();
         private TcpListener _listener;
+        private CancellationTokenSource _stopCts;
+        private Task _acceptTask;
+        private Task _warmupTask;
+        private Task _sweepTask;
         private volatile bool _running;
+
+        public static bool IsAllowedDc(int dc)
+        {
+            return (dc >= 1 && dc <= 5) || dc == 203 || (dc >= 10001 && dc <= 10005);
+        }
+
+        public bool AddUserDcRedirect(int dc, string ipText)
+        {
+            if (!IsAllowedDc(dc) || string.IsNullOrWhiteSpace(ipText))
+                return false;
+            IPAddress parsed;
+            if (!IPAddress.TryParse(ipText.Trim(), out parsed))
+                return false;
+            int normDc = dc >= 10000 ? dc - 10000 : dc;
+            DcRedirects[normDc] = parsed.ToString();
+            _userDcRedirects.Add(normDc);
+            return true;
+        }
+
+        private static bool IsReparsePoint(string path)
+        {
+            try
+            {
+                if (File.Exists(path) || Directory.Exists(path))
+                {
+                    FileAttributes attr = File.GetAttributes(path);
+                    return (attr & FileAttributes.ReparsePoint) != 0;
+                }
+            }
+            catch
+            {
+                return true;
+            }
+            return false;
+        }
+
+        private static string ValidateLogFilePath(string rawPath)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath))
+                return "";
+            string binDir = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory).TrimEnd('\\') + "\\";
+            string logsDir = Path.Combine(binDir, "logs") + "\\";
+            string candLog = Path.GetFullPath(Path.IsPathRooted(rawPath) ? rawPath : Path.Combine(logsDir, rawPath));
+            if (!candLog.StartsWith(logsDir, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("LogFile must reside inside bin\\logs\\ directory: " + rawPath);
+
+            string binRootNoSlash = binDir.TrimEnd('\\');
+            string logDir = Path.GetDirectoryName(candLog);
+            string curDir = logDir;
+            while (!string.IsNullOrEmpty(curDir))
+            {
+                if (IsReparsePoint(curDir))
+                    throw new ArgumentException("LogFile directory chain contains a reparse point: " + curDir);
+                if (curDir.TrimEnd('\\').Equals(binRootNoSlash, StringComparison.OrdinalIgnoreCase))
+                    break;
+                string nextDir = Path.GetDirectoryName(curDir);
+                if (string.IsNullOrEmpty(nextDir) || nextDir.Equals(curDir, StringComparison.OrdinalIgnoreCase))
+                    break;
+                if (!nextDir.StartsWith(binRootNoSlash, StringComparison.OrdinalIgnoreCase))
+                    break;
+                curDir = nextDir;
+            }
+            if (!string.IsNullOrEmpty(logDir) && !Directory.Exists(logDir))
+            {
+                try { Directory.CreateDirectory(logDir); } catch { }
+            }
+            if (!string.IsNullOrEmpty(logDir) && IsReparsePoint(logDir))
+                throw new ArgumentException("LogFile directory is a reparse point: " + logDir);
+            if (IsReparsePoint(candLog))
+                throw new ArgumentException("LogFile is a reparse point: " + candLog);
+            return candLog;
+        }
 
         public void LoadConfigFile(string path)
         {
@@ -761,7 +1076,7 @@ namespace ZapretTgWsProxy
                     continue;
                 string k = line.Substring(0, eq).Trim().ToLowerInvariant();
                 string v = line.Substring(eq + 1).Trim();
-                if (k == "host" && (v == "127.0.0.1" || v == "::1" || v.Equals("localhost", StringComparison.OrdinalIgnoreCase))) Host = v.Equals("localhost", StringComparison.OrdinalIgnoreCase) ? "127.0.0.1" : v;
+                if (k == "host" && !string.IsNullOrEmpty(v)) Host = v;
                 else if (k == "port") { int p; if (int.TryParse(v, out p) && p > 0 && p < 65536) Port = p; }
                 else if (k == "secret" && IsValidHex32(v)) SecretHex = v.ToLowerInvariant();
                 else if (k == "mode" && !string.IsNullOrEmpty(v)) Mode = v.ToLowerInvariant();
@@ -776,37 +1091,49 @@ namespace ZapretTgWsProxy
                     foreach (string d in v.Split(new char[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
                         if (!CfWorkerDomains.Contains(d.Trim())) CfWorkerDomains.Add(d.Trim());
                 }
-                else if (k == "log_file" && !string.IsNullOrEmpty(v))
-                {
-                    try
-                    {
-                        string binDir = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory).TrimEnd('\\') + "\\";
-                        string candLog = Path.GetFullPath(Path.IsPathRooted(v) ? v : Path.Combine(binDir, v));
-                        if (candLog.StartsWith(binDir, StringComparison.OrdinalIgnoreCase)) LogFile = candLog;
-                    } catch { }
-                }
+                else if (k == "log_file" && !string.IsNullOrEmpty(v)) LogFile = v;
                 else if (k == "verbose") Verbose = (v == "1" || v.Equals("true", StringComparison.OrdinalIgnoreCase));
             }
         }
 
         public void FinalizeConfig()
         {
+            string h = (Host ?? "").Trim();
+            if (h.Equals("localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                Host = "127.0.0.1";
+            }
+            else if (h == "127.0.0.1" || h == "::1")
+            {
+                Host = h;
+            }
+            else
+            {
+                throw new ArgumentException("Invalid Host '" + h + "': only loopback (127.0.0.1, ::1, localhost) is allowed.");
+            }
+
+            if (Port <= 0 || Port >= 65536)
+                throw new ArgumentException("Invalid Port: " + Port);
+
+            string m = (Mode ?? "smart").Trim().ToLowerInvariant();
+            if (m != "smart" && m != "direct" && m != "cfonly")
+                throw new ArgumentException("Invalid Mode '" + m + "': expected smart, direct, or cfonly.");
+            Mode = m;
+            if (Mode == "direct")
+                FallbackCfProxy = false;
+
+            LogFile = ValidateLogFilePath(LogFile);
+
             if (!IsValidHex32(SecretHex))
             {
                 byte[] sb = new byte[16];
-                Rng.GetBytes(sb);
+                ThreadSafeRng.GetBytes(sb);
                 SecretHex = BytesToHex(sb);
             }
             SecretBytes = HexToBytes(SecretHex);
 
-            if (PoolSize <= 0)
+            if (PoolSize < 0)
                 PoolSize = 4;
-
-            if (DcRedirects.Count == 0 && Mode != "cfonly")
-            {
-                DcRedirects[2] = _workingDirectIp;
-                DcRedirects[4] = _workingDirectIp;
-            }
 
             if (CfUserDomains.Count > 0)
             {
@@ -819,7 +1146,7 @@ namespace ZapretTgWsProxy
         {
             if (level == "DEBUG" && !Verbose)
                 return;
-            string line = string.Format("{0:HH:mm:ss}  {1,-5}  {2}", DateTime.Now, level, msg);
+            string line = string.Format("{0:yyyy-MM-dd HH:mm:ss}  {1,-5}  {2}", DateTime.Now, level, msg);
             lock (_logLock)
             {
                 if (Environment.UserInteractive)
@@ -830,13 +1157,22 @@ namespace ZapretTgWsProxy
                 {
                     try
                     {
-                        FileInfo fi = new FileInfo(LogFile);
-                        if (fi.Exists && fi.Length > 5 * 1024 * 1024)
+                        if (IsReparsePoint(LogFile))
+                            return;
+                        try
                         {
-                            string bak = LogFile + ".1";
-                            if (File.Exists(bak)) File.Delete(bak);
-                            File.Move(LogFile, bak);
+                            FileInfo fi = new FileInfo(LogFile);
+                            if (fi.Exists && fi.Length > 5 * 1024 * 1024)
+                            {
+                                string bak = LogFile + ".1";
+                                if (!IsReparsePoint(bak))
+                                {
+                                    if (File.Exists(bak)) File.Delete(bak);
+                                    File.Move(LogFile, bak);
+                                }
+                            }
                         }
+                        catch { }
                         File.AppendAllText(LogFile, line + Environment.NewLine, Encoding.UTF8);
                     }
                     catch { }
@@ -848,6 +1184,7 @@ namespace ZapretTgWsProxy
         {
             FinalizeConfig();
             _running = true;
+            _stopCts = new CancellationTokenSource();
             IPAddress bindIp;
             if (!IPAddress.TryParse(Host, out bindIp))
                 bindIp = IPAddress.Loopback;
@@ -864,14 +1201,51 @@ namespace ZapretTgWsProxy
             Log("INFO", string.Format("  Connect Link:  tg://proxy?server={0}&port={1}&secret=dd{2}", Host, Port, maskedSecret));
             Log("INFO", "============================================================");
 
-            Task bgWarmup = Task.Run(delegate { return WarmupPoolsAsync(); });
-            Task bgAccept = Task.Run(delegate { return AcceptLoopAsync(); });
+            CancellationToken stopToken = _stopCts.Token;
+            _warmupTask = Task.Run(delegate { return WarmupPoolsAsync(stopToken); });
+            TaskTimeoutHelper.ObserveExceptions(_warmupTask);
+            _sweepTask = Task.Run(delegate { return SweepPoolsLoopAsync(stopToken); });
+            TaskTimeoutHelper.ObserveExceptions(_sweepTask);
+            _acceptTask = Task.Run(delegate { return AcceptLoopAsync(stopToken); });
+            TaskTimeoutHelper.ObserveExceptions(_acceptTask);
         }
 
         public void Stop()
         {
             _running = false;
+            CancellationTokenSource cts = _stopCts;
+            try { if (cts != null) cts.Cancel(); } catch { }
             try { if (_listener != null) _listener.Stop(); } catch { }
+
+            foreach (KeyValuePair<TcpClient, byte> kv in _activeClients)
+            {
+                try { kv.Key.Close(); } catch { }
+            }
+            _activeClients.Clear();
+
+            List<Task> bgTasks = new List<Task>();
+            Task acceptTask = _acceptTask;
+            Task warmupTask = _warmupTask;
+            Task sweepTask = _sweepTask;
+            _acceptTask = null;
+            _warmupTask = null;
+            _sweepTask = null;
+            if (acceptTask != null) bgTasks.Add(acceptTask);
+            if (warmupTask != null) bgTasks.Add(warmupTask);
+            if (sweepTask != null) bgTasks.Add(sweepTask);
+            if (bgTasks.Count > 0)
+            {
+                try { Task.WaitAll(bgTasks.ToArray(), 2000); } catch { }
+            }
+
+            DrainAllPools();
+            _stopCts = null;
+            try { if (cts != null) cts.Dispose(); } catch { }
+            Log("INFO", "Proxy stopped.");
+        }
+
+        private void DrainAllPools()
+        {
             foreach (KeyValuePair<string, ConcurrentQueue<RawWebSocket>> kv in _wsPool)
             {
                 RawWebSocket ws;
@@ -884,16 +1258,94 @@ namespace ZapretTgWsProxy
                 while (kv.Value.TryDequeue(out ws))
                     ws.Dispose();
             }
-            Log("INFO", "Proxy stopped.");
         }
 
-        private async Task WarmupPoolsAsync()
+        private void EnqueueDirectSafe(ConcurrentQueue<RawWebSocket> q, RawWebSocket ws)
+        {
+            if (!_running)
+            {
+                ws.Dispose();
+                return;
+            }
+            q.Enqueue(ws);
+            if (!_running)
+            {
+                RawWebSocket stale;
+                while (q.TryDequeue(out stale))
+                    stale.Dispose();
+            }
+        }
+
+        private void EnqueueCfSafe(ConcurrentQueue<RawWebSocket> q, RawWebSocket ws)
+        {
+            if (!_running)
+            {
+                ws.Dispose();
+                return;
+            }
+            q.Enqueue(ws);
+            if (!_running)
+            {
+                RawWebSocket stale;
+                while (q.TryDequeue(out stale))
+                    stale.Dispose();
+            }
+        }
+
+        private async Task SweepPoolsLoopAsync(CancellationToken ct)
+        {
+            while (_running && !ct.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(30000, ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    break;
+                }
+                if (!_running) break;
+
+                foreach (KeyValuePair<string, ConcurrentQueue<RawWebSocket>> kv in _wsPool)
+                {
+                    int n = kv.Value.Count;
+                    for (int i = 0; i < n; i++)
+                    {
+                        RawWebSocket ws;
+                        if (!kv.Value.TryDequeue(out ws)) break;
+                        if (ws.IsStale(95.0) || !_running)
+                            ws.Dispose();
+                        else
+                            EnqueueDirectSafe(kv.Value, ws);
+                    }
+                }
+                foreach (KeyValuePair<int, ConcurrentQueue<RawWebSocket>> kv in _cfPool)
+                {
+                    int n = kv.Value.Count;
+                    for (int i = 0; i < n; i++)
+                    {
+                        RawWebSocket ws;
+                        if (!kv.Value.TryDequeue(out ws)) break;
+                        if (ws.IsStale(85.0) || !_running)
+                            ws.Dispose();
+                        else
+                            EnqueueCfSafe(kv.Value, ws);
+                    }
+                }
+            }
+        }
+
+        private async Task WarmupPoolsAsync(CancellationToken ct)
         {
             try
             {
+                if (!_running || ct.IsCancellationRequested)
+                    return;
                 if (Mode != "cfonly")
                 {
                     bool directOk = await EnsureDirectWsProbedAsync().ConfigureAwait(false);
+                    if (!_running || ct.IsCancellationRequested)
+                        return;
                     if (directOk)
                     {
                         ScheduleDirectRefill(2, false);
@@ -903,12 +1355,20 @@ namespace ZapretTgWsProxy
                     }
                 }
 
+                if (!_running || ct.IsCancellationRequested)
+                    return;
+
                 // Always warm up CF pool for Smart Media / CF-only / Direct-blocked fallback
                 RawWebSocket probeCf = await ConnectCfFastAsync(2).ConfigureAwait(false);
                 if (probeCf != null)
                 {
+                    if (!_running || ct.IsCancellationRequested)
+                    {
+                        probeCf.Dispose();
+                        return;
+                    }
                     ConcurrentQueue<RawWebSocket> q2 = _cfPool.GetOrAdd(2, delegate { return new ConcurrentQueue<RawWebSocket>(); });
-                    q2.Enqueue(probeCf);
+                    EnqueueCfSafe(q2, probeCf);
                     ScheduleCfRefill(2);
                     ScheduleCfRefill(4);
                 }
@@ -929,7 +1389,7 @@ namespace ZapretTgWsProxy
             if (state == 1)
                 return true;
             if (state == 0 && (nowMs - Interlocked.Read(ref _lastDirectProbeUtcMs)) < 180000L)
-                return false; // Circuit breaker open for 3 minutes so we never block client requests
+                return false;
 
             await _directProbeLock.WaitAsync().ConfigureAwait(false);
             try
@@ -943,7 +1403,6 @@ namespace ZapretTgWsProxy
 
                 Interlocked.Exchange(ref _lastDirectProbeUtcMs, nowMs);
 
-                // Race all candidate Telegram Direct WS IPs in parallel with 2200ms timeout
                 List<Task<RawWebSocket>> tasks = new List<Task<RawWebSocket>>();
                 List<string> taskIps = new List<string>();
                 for (int i = 0; i < DirectWsCandidateIps.Length; i++)
@@ -965,17 +1424,21 @@ namespace ZapretTgWsProxy
                         int idx = tasks.IndexOf(finished);
                         string winIp = idx >= 0 ? taskIps[idx] : "149.154.167.220";
                         _workingDirectIp = winIp;
-                        DcRedirects.TryAdd(2, winIp);
-                        DcRedirects.TryAdd(4, winIp);
+                        if (!_userDcRedirects.Contains(2)) DcRedirects[2] = winIp;
+                        if (!_userDcRedirects.Contains(4)) DcRedirects[4] = winIp;
+                        Interlocked.Exchange(ref _directFailStreak, 0);
                         _directWsState = 1;
                         Log("INFO", "Direct Telegram WS reachable via " + winIp);
 
                         ConcurrentQueue<RawWebSocket> q4 = _wsPool.GetOrAdd("4", delegate { return new ConcurrentQueue<RawWebSocket>(); });
-                        q4.Enqueue(winner);
+                        EnqueueDirectSafe(q4, winner);
 
-                        // Dispose any late completions
                         CleanupRemainingTasks(pending);
                         return true;
+                    }
+                    else if (finished.IsFaulted && finished.Exception != null)
+                    {
+                        GC.KeepAlive(finished.Exception);
                     }
                 }
 
@@ -998,7 +1461,7 @@ namespace ZapretTgWsProxy
                 {
                     if (done.IsFaulted)
                     {
-                        AggregateException ignored = done.Exception;
+                        if (done.Exception != null) GC.KeepAlive(done.Exception);
                         return;
                     }
                     if (done.Status == TaskStatus.RanToCompletion && done.Result != null)
@@ -1017,18 +1480,20 @@ namespace ZapretTgWsProxy
             if (!_refilling.TryAdd("d:" + key, 1))
                 return;
 
-            Task.Run(async delegate
+            TaskTimeoutHelper.ObserveExceptions(Task.Run(async delegate
             {
                 try
                 {
                     ConcurrentQueue<RawWebSocket> q = _wsPool.GetOrAdd(key, delegate { return new ConcurrentQueue<RawWebSocket>(); });
-                    int needed = Math.Max(0, 2 - q.Count);
+                    int needed = Math.Max(0, Math.Min(PoolSize, 3) - q.Count);
                     for (int i = 0; i < needed && _running && _directWsState == 1; i++)
                     {
-                        RawWebSocket ws = await ConnectDirectWsAsync(dc, isMedia, _workingDirectIp).ConfigureAwait(false);
-                        if (ws != null) { if (_running) q.Enqueue(ws); else ws.Dispose(); }
-                        else
-                            break;
+                        string targetIp;
+                        if (!DcRedirects.TryGetValue(dc, out targetIp) || string.IsNullOrEmpty(targetIp))
+                            targetIp = _workingDirectIp;
+                        RawWebSocket ws = await ConnectDirectWsAsync(dc, isMedia, targetIp).ConfigureAwait(false);
+                        if (ws != null) EnqueueDirectSafe(q, ws);
+                        else break;
                     }
                 }
                 finally
@@ -1036,7 +1501,7 @@ namespace ZapretTgWsProxy
                     int dummy;
                     _refilling.TryRemove("d:" + key, out dummy);
                 }
-            });
+            }));
         }
 
         private void ScheduleCfRefill(int dc)
@@ -1048,7 +1513,7 @@ namespace ZapretTgWsProxy
             if (!_refilling.TryAdd(rKey, 1))
                 return;
 
-            Task.Run(async delegate
+            TaskTimeoutHelper.ObserveExceptions(Task.Run(async delegate
             {
                 try
                 {
@@ -1058,9 +1523,8 @@ namespace ZapretTgWsProxy
                     for (int i = 0; i < needed && _running; i++)
                     {
                         RawWebSocket ws = await ConnectCfFastAsync(normDc).ConfigureAwait(false);
-                        if (ws != null) { if (_running) q.Enqueue(ws); else ws.Dispose(); }
-                        else
-                            break;
+                        if (ws != null) EnqueueCfSafe(q, ws);
+                        else break;
                     }
                 }
                 finally
@@ -1068,58 +1532,68 @@ namespace ZapretTgWsProxy
                     int dummy;
                     _refilling.TryRemove(rKey, out dummy);
                 }
-            });
+            }));
         }
 
-        private async Task<RawWebSocket> GetPooledDirectWsAsync(int dc, bool isMedia)
+        private async Task<RawWebSocket> GetPooledDirectWsAsync(int dc, bool isMedia, bool skipPool)
         {
             if (Mode == "cfonly")
                 return null;
 
-            if ( dc != 2 && dc != 4 && !DcRedirects.ContainsKey(dc))
+            int normDc = dc == 203 ? 2 : dc;
+            if (normDc < 1 || normDc > 5)
                 return null;
 
             bool reachable = await EnsureDirectWsProbedAsync().ConfigureAwait(false);
             if (!reachable)
-                return null; // Instant 0ms fallback to Cloudflare Clean-IP when Direct WS is blocked!
+                return null;
 
             string key = dc.ToString() + (isMedia ? "m" : "");
-            ConcurrentQueue<RawWebSocket> q;
-            if (_wsPool.TryGetValue(key, out q))
+            if (!skipPool)
             {
-                RawWebSocket ws;
-                while (q.TryDequeue(out ws))
+                ConcurrentQueue<RawWebSocket> q;
+                if (_wsPool.TryGetValue(key, out q))
                 {
-                    if (ws.IsStale(95.0))
+                    RawWebSocket ws;
+                    while (q.TryDequeue(out ws))
                     {
-                        ws.Dispose();
-                        continue;
+                        if (ws.IsStale(95.0))
+                        {
+                            ws.Dispose();
+                            continue;
+                        }
+                        ScheduleDirectRefill(dc, isMedia);
+                        return ws;
                     }
-                    ScheduleDirectRefill(dc, isMedia);
-                    return ws;
                 }
             }
 
             ScheduleDirectRefill(dc, isMedia);
-            string targetIp; if (!DcRedirects.TryGetValue(dc, out targetIp) || string.IsNullOrEmpty(targetIp)) targetIp = _workingDirectIp; return await ConnectDirectWsAsync(dc, isMedia, targetIp).ConfigureAwait(false);
+            string targetIp;
+            if (!DcRedirects.TryGetValue(dc, out targetIp) || string.IsNullOrEmpty(targetIp))
+                targetIp = _workingDirectIp;
+            return await ConnectDirectWsAsync(dc, isMedia, targetIp).ConfigureAwait(false);
         }
 
-        private async Task<RawWebSocket> GetPooledCfWsAsync(int dc)
+        private async Task<RawWebSocket> GetPooledCfWsAsync(int dc, bool skipPool)
         {
             int normDc = dc == 203 ? 2 : dc;
-            ConcurrentQueue<RawWebSocket> q;
-            if (_cfPool.TryGetValue(normDc, out q))
+            if (!skipPool)
             {
-                RawWebSocket ws;
-                while (q.TryDequeue(out ws))
+                ConcurrentQueue<RawWebSocket> q;
+                if (_cfPool.TryGetValue(normDc, out q))
                 {
-                    if (ws.IsStale(85.0))
+                    RawWebSocket ws;
+                    while (q.TryDequeue(out ws))
                     {
-                        ws.Dispose();
-                        continue;
+                        if (ws.IsStale(85.0))
+                        {
+                            ws.Dispose();
+                            continue;
+                        }
+                        ScheduleCfRefill(normDc);
+                        return ws;
                     }
-                    ScheduleCfRefill(normDc);
-                    return ws;
                 }
             }
 
@@ -1136,14 +1610,24 @@ namespace ZapretTgWsProxy
 
             try
             {
-                return await RawWebSocket.ConnectAsync(
+                RawWebSocket ws = await RawWebSocket.ConnectAsync(
                     targetIp, 443, domain, "/apiws", domain, true, BufferSize, 2500, "direct:" + domain + "@" + targetIp).ConfigureAwait(false);
+                Interlocked.Exchange(ref _directFailStreak, 0);
+                return ws;
             }
             catch (Exception ex)
             {
-                _directWsState = 0;
-                Interlocked.Exchange(ref _lastDirectProbeUtcMs, DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond);
-                Log("DEBUG", string.Format("Direct WS {0} via {1} failed: {2}", domain, targetIp, ex.Message));
+                int streak = Interlocked.Increment(ref _directFailStreak);
+                if (streak >= DirectCircuitBreakerThreshold)
+                {
+                    _directWsState = 0;
+                    Interlocked.Exchange(ref _lastDirectProbeUtcMs, DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond);
+                    Log("INFO", string.Format("Direct WS circuit breaker opened after {0} failures ({1})", streak, ex.Message));
+                }
+                else
+                {
+                    Log("DEBUG", string.Format("Direct WS {0} via {1} failed ({2}/{3}): {4}", domain, targetIp, streak, DirectCircuitBreakerThreshold, ex.Message));
+                }
                 return null;
             }
         }
@@ -1162,6 +1646,9 @@ namespace ZapretTgWsProxy
             int normDc = dc == 203 ? 2 : dc;
             string dstIp;
             DcDefaultIps.TryGetValue(dc, out dstIp);
+
+            if (!FallbackCfProxy)
+                return null;
 
             // 1. Custom CF Worker domains if configured
             if (CfWorkerDomains.Count > 0 && !string.IsNullOrEmpty(dstIp))
@@ -1188,11 +1675,11 @@ namespace ZapretTgWsProxy
                 }
             }
 
-            if (!FallbackCfProxy || _cfDomains.Count == 0)
+            if (_cfDomains.Count == 0)
                 return null;
 
             // 2. Fast-path using cached winning route spec
-            CfRouteSpec cached = _bestCfRoute;
+            CfRouteSpec cached = Volatile.Read(ref _bestCfRoute);
             if (cached != null)
             {
                 try
@@ -1204,7 +1691,7 @@ namespace ZapretTgWsProxy
                 catch (Exception ex)
                 {
                     Log("DEBUG", "Cached CF route failed (" + cached.Label + "): " + ex.Message);
-                    _bestCfRoute = null;
+                    Interlocked.CompareExchange(ref _bestCfRoute, null, cached);
                 }
             }
 
@@ -1212,7 +1699,7 @@ namespace ZapretTgWsProxy
             await _cfProbeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                CfRouteSpec winnerCached = _bestCfRoute;
+                CfRouteSpec winnerCached = Volatile.Read(ref _bestCfRoute);
                 if (winnerCached != null)
                 {
                     try
@@ -1223,7 +1710,7 @@ namespace ZapretTgWsProxy
                     }
                     catch
                     {
-                        _bestCfRoute = null;
+                        Interlocked.CompareExchange(ref _bestCfRoute, null, winnerCached);
                     }
                 }
                 return await RaceCfRoutesAsync(normDc, 4200).ConfigureAwait(false);
@@ -1240,34 +1727,31 @@ namespace ZapretTgWsProxy
             int baseIdx = rnd.Next(_cfDomains.Count);
             string dom1 = _cfDomains[baseIdx];
             string dom2 = _cfDomains[(baseIdx + 7) % _cfDomains.Count];
-            string dom3 = _cfDomains[(baseIdx + 13) % _cfDomains.Count];
 
             string ip1 = CleanCfAnycastIps[0]; // 104.16.132.229
-            string ip2 = CleanCfAnycastIps[1]; // 104.17.24.14
             string ip3 = CleanCfAnycastIps[2]; // 104.18.32.47
             string ip4 = CleanCfAnycastIps[3]; // 172.64.155.209
 
             List<CfRouteSpec> specs = new List<CfRouteSpec>();
             if (!DisableSecure)
             {
-                // Clean Cloudflare Anycast IP over WSS :443 (bypasses 188.114.96.x / 104.21.x.x IP blackhole)
                 specs.Add(new CfRouteSpec(ip1, 443, true, null, dom1, "cf-clean-wss"));
                 specs.Add(new CfRouteSpec(ip4, 443, true, null, dom2, "cf-clean-wss"));
+                specs.Add(new CfRouteSpec(null, 443, true, null, dom1, "cf-dns-wss"));
             }
-            // Clean Cloudflare Anycast IP over Plain HTTP WS :80 (bypasses TLS/ECH/SNI filters; MTProto remains AES-256 encrypted)
             specs.Add(new CfRouteSpec(ip1, 80, false, null, dom1, "cf-clean-ws80"));
             specs.Add(new CfRouteSpec(ip3, 80, false, null, dom2, "cf-clean-ws80"));
-            if (!DisableSecure)
-                specs.Add(new CfRouteSpec(null, 443, true, null, dom1, "cf-dns-wss"));
             specs.Add(new CfRouteSpec(null, 80, false, null, dom2, "cf-dns-ws80"));
 
             List<Task<RawWebSocket>> tasks = new List<Task<RawWebSocket>>(specs.Count);
+            List<Task<RawWebSocket>> pending = new List<Task<RawWebSocket>>(specs.Count);
             for (int i = 0; i < specs.Count; i++)
             {
-                tasks.Add(ConnectViaSpecAsync(normDc, specs[i], timeoutMs));
+                Task<RawWebSocket> t = ConnectViaSpecAsync(normDc, specs[i], timeoutMs);
+                tasks.Add(t);
+                pending.Add(t);
             }
 
-            List<Task<RawWebSocket>> pending = new List<Task<RawWebSocket>>(tasks);
             while (pending.Count > 0)
             {
                 Task<RawWebSocket> done = await Task.WhenAny(pending).ConfigureAwait(false);
@@ -1278,77 +1762,56 @@ namespace ZapretTgWsProxy
                     int winIdx = tasks.IndexOf(done);
                     if (winIdx >= 0)
                     {
-                        CfRouteSpec winSpec = specs[winIdx];
-                        _bestCfRoute = winSpec;
+                        Volatile.Write(ref _bestCfRoute, specs[winIdx]);
                         Log("INFO", "Selected optimal Cloudflare route: " + winner.RouteLabel);
-                        // Zero-delay TLS upgrade: if :80 won first, return immediately (0ms delay),
-                        // but if an in-flight :443 task also succeeds shortly after, upgrade _bestCfRoute to :443.
-                        if (!winSpec.Secure && !DisableSecure)
-                        {
-                            List<Task<RawWebSocket>> nonTlsPending = new List<Task<RawWebSocket>>();
-                            for (int pi = 0; pi < pending.Count; pi++)
-                            {
-                                Task<RawWebSocket> pt = pending[pi];
-                                int pIdx = tasks.IndexOf(pt);
-                                if (pIdx >= 0 && specs[pIdx].Secure)
-                                {
-                                    CfRouteSpec tlsSpec = specs[pIdx];
-                                    pt.ContinueWith(delegate(Task<RawWebSocket> t)
-                                    {
-                                        if (t.Status == TaskStatus.RanToCompletion && t.Result != null)
-                                        {
-                                            try { t.Result.Dispose(); } catch { }
-                                            CfRouteSpec cur = _bestCfRoute;
-                                            if (cur != null && !cur.Secure)
-                                            {
-                                                _bestCfRoute = tlsSpec;
-                                                Log("INFO", "Upgraded Cloudflare route to TLS :443 (" + tlsSpec.Label + ")");
-                                            }
-                                        }
-                                        else if (t.IsFaulted) { var _ = t.Exception; }
-                                    });
-                                }
-                                else
-                                {
-                                    nonTlsPending.Add(pt);
-                                }
-                            }
-                            CleanupRemainingTasks(nonTlsPending);
-                            return winner;
-                        }
                     }
                     CleanupRemainingTasks(pending);
                     return winner;
+                }
+                else if (done.IsFaulted && done.Exception != null)
+                {
+                    GC.KeepAlive(done.Exception);
                 }
             }
             return null;
         }
 
-        private async Task AcceptLoopAsync()
+        private async Task AcceptLoopAsync(CancellationToken ct)
         {
-            while (_running)
+            while (_running && !ct.IsCancellationRequested)
             {
-                TcpClient client = null;
+                bool acquired = false;
                 bool delayAfterError = false;
                 try
                 {
-                    client = await _listener.AcceptTcpClientAsync().ConfigureAwait(false);
+                    await _connSlots.WaitAsync(ct).ConfigureAwait(false);
+                    acquired = true;
+                    TcpClient client = await _listener.AcceptTcpClientAsync().ConfigureAwait(false);
+                    acquired = false; // ownership transferred to HandleClientAsync
                     TcpClient captured = client;
-                    Task clientTask = Task.Run(delegate { return HandleClientAsync(captured); });
+                    _activeClients.TryAdd(captured, 0);
+                    TaskTimeoutHelper.ObserveExceptions(Task.Run(delegate { return HandleClientAsync(captured); }));
+                }
+                catch (OperationCanceledException)
+                {
+                    if (acquired) _connSlots.Release();
+                    break;
                 }
                 catch (ObjectDisposedException)
                 {
+                    if (acquired) _connSlots.Release();
                     break;
                 }
                 catch (Exception ex)
                 {
+                    if (acquired) _connSlots.Release();
                     if (_running)
                         Log("WARN", "Accept error: " + ex.Message);
                     delayAfterError = true;
                 }
                 if (delayAfterError)
                 {
-                    await Task.Delay(200).ConfigureAwait(false);
+                    try { await Task.Delay(200, ct).ConfigureAwait(false); } catch { break; }
                 }
             }
         }
@@ -1356,24 +1819,33 @@ namespace ZapretTgWsProxy
         private async Task HandleClientAsync(TcpClient client)
         {
             string label = "?";
+            _activeClients.TryAdd(client, 0);
             try
             {
+                if (!_running)
+                    return;
                 client.NoDelay = true;
                 client.ReceiveBufferSize = BufferSize;
                 client.SendBufferSize = BufferSize;
+                RawWebSocket.EnableTcpKeepAlive(client);
                 if (client.Client.RemoteEndPoint != null)
                     label = client.Client.RemoteEndPoint.ToString();
 
                 NetworkStream cltStream = client.GetStream();
-                Task<byte[]> hsTask = RawWebSocket.ReadExactlyAsync(cltStream, 64);
-                using (CancellationTokenSource hsCts = new CancellationTokenSource())
+                byte[] handshake;
+                try
                 {
-                    if (await Task.WhenAny(hsTask, Task.Delay(10000, hsCts.Token)).ConfigureAwait(false) != hsTask)
-                        return;
-                    hsCts.Cancel();
+                    handshake = await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                        RawWebSocket.ReadExactlyAsync(cltStream, 64),
+                        10000,
+                        "Client MTProto handshake timeout",
+                        delegate { client.Close(); }).ConfigureAwait(false);
+                }
+                catch (System.TimeoutException)
+                {
+                    return;
                 }
 
-                byte[] handshake = await hsTask.ConfigureAwait(false);
                 if (handshake == null || handshake.Length != 64)
                     return;
 
@@ -1395,22 +1867,39 @@ namespace ZapretTgWsProxy
 
                 byte[] relayInit = GenerateRelayInit(protoTag, dcIdx);
                 using (CryptoCtx ctx = BuildCryptoCtx(cltPrekeyIv, SecretBytes, relayInit))
+                using (MsgSplitter splitter = new MsgSplitter(protoInt))
                 {
-                    MsgSplitter splitter = new MsgSplitter(protoInt);
-                    RawWebSocket ws = await GetPooledDirectWsAsync(dc, isMedia).ConfigureAwait(false);
-                    if (ws == null)
+                    // 1 retry on stale pooled socket if SendBinaryAsync(relayInit) fails
+                    for (int attempt = 0; attempt < 2; attempt++)
                     {
-                        ws = await GetPooledCfWsAsync(dc).ConfigureAwait(false);
-                    }
+                        bool skipPool = (attempt > 0);
+                        RawWebSocket ws = await GetPooledDirectWsAsync(dc, isMedia, skipPool).ConfigureAwait(false);
+                        if (ws == null)
+                        {
+                            ws = await GetPooledCfWsAsync(dc, skipPool).ConfigureAwait(false);
+                        }
 
-                    if (ws != null)
-                    {
+                        if (ws == null)
+                            break;
+
+                        bool initSent = false;
                         using (ws)
                         {
-                            Log("INFO", string.Format("[{0}] DC{1}{2} -> {3}", label, dc, isMedia ? " media" : "", ws.RouteLabel));
-                            await ws.SendBinaryAsync(relayInit).ConfigureAwait(false);
-                            await BridgeWsAsync(cltStream, ws, ctx, splitter, label, dc, isMedia).ConfigureAwait(false);
-                            return;
+                            try
+                            {
+                                await ws.SendBinaryAsync(relayInit).ConfigureAwait(false);
+                                initSent = true;
+                            }
+                            catch (Exception ex)
+                            {
+                                Log("DEBUG", string.Format("[{0}] Stale WS on relayInit (attempt {1}): {2}", label, attempt + 1, ex.Message));
+                            }
+                            if (initSent)
+                            {
+                                Log("INFO", string.Format("[{0}] DC{1}{2} -> {3}", label, dc, isMedia ? " media" : "", ws.RouteLabel));
+                                await BridgeWsAsync(cltStream, ws, ctx, splitter).ConfigureAwait(false);
+                                return;
+                            }
                         }
                     }
 
@@ -1428,7 +1917,10 @@ namespace ZapretTgWsProxy
             }
             finally
             {
+                byte removed;
+                _activeClients.TryRemove(client, out removed);
                 try { client.Close(); } catch { }
+                try { _connSlots.Release(); } catch { }
             }
         }
 
@@ -1475,7 +1967,7 @@ namespace ZapretTgWsProxy
             dcIdx = (short)(decrypted[60] | (decrypted[61] << 8));
             dc = Math.Abs((int)dcIdx);
             isMedia = dcIdx < 0;
-            if (dc < 1 || (dc > 10 && dc < 200))
+            if (!IsAllowedDc(dc))
                 return false;
             return true;
         }
@@ -1485,7 +1977,7 @@ namespace ZapretTgWsProxy
             byte[] rnd = new byte[64];
             while (true)
             {
-                Rng.GetBytes(rnd);
+                ThreadSafeRng.GetBytes(rnd);
                 if (rnd[0] == 0xEF) continue;
                 uint first4 = (uint)(rnd[0] | (rnd[1] << 8) | (rnd[2] << 16) | (rnd[3] << 24));
                 if (first4 == 0x44414548U || first4 == 0x54534F50U || first4 == 0x20544547U ||
@@ -1551,10 +2043,6 @@ namespace ZapretTgWsProxy
                 cltEncKey = sha.ComputeHash(buf2);
             }
 
-            AesCtrCipher cltDec = new AesCtrCipher(cltDecKey, cltDecIv);
-            AesCtrCipher cltEnc = new AesCtrCipher(cltEncKey, cltEncIv);
-            cltDec.Update(new byte[64], 0, 64);
-
             byte[] relayEncKey = new byte[32];
             byte[] relayEncIv = new byte[16];
             Buffer.BlockCopy(relayInit, 8, relayEncKey, 0, 32);
@@ -1569,16 +2057,35 @@ namespace ZapretTgWsProxy
             Buffer.BlockCopy(revRelay, 0, relayDecKey, 0, 32);
             Buffer.BlockCopy(revRelay, 32, relayDecIv, 0, 16);
 
-            AesCtrCipher tgEnc = new AesCtrCipher(relayEncKey, relayEncIv);
-            AesCtrCipher tgDec = new AesCtrCipher(relayDecKey, relayDecIv);
-            tgEnc.Update(new byte[64], 0, 64);
+            AesCtrCipher cltDec = null;
+            AesCtrCipher cltEnc = null;
+            AesCtrCipher tgEnc = null;
+            AesCtrCipher tgDec = null;
+            try
+            {
+                cltDec = new AesCtrCipher(cltDecKey, cltDecIv);
+                cltEnc = new AesCtrCipher(cltEncKey, cltEncIv);
+                byte[] skip64 = new byte[64];
+                cltDec.UpdateInPlace(skip64, 0, 64);
 
-            return new CryptoCtx(cltDec, cltEnc, tgEnc, tgDec);
+                tgEnc = new AesCtrCipher(relayEncKey, relayEncIv);
+                tgDec = new AesCtrCipher(relayDecKey, relayDecIv);
+                tgEnc.UpdateInPlace(skip64, 0, 64);
+
+                return new CryptoCtx(cltDec, cltEnc, tgEnc, tgDec);
+            }
+            catch
+            {
+                if (cltDec != null) cltDec.Dispose();
+                if (cltEnc != null) cltEnc.Dispose();
+                if (tgEnc != null) tgEnc.Dispose();
+                if (tgDec != null) tgDec.Dispose();
+                throw;
+            }
         }
 
         private async Task BridgeWsAsync(
-            NetworkStream cltStream, RawWebSocket ws, CryptoCtx ctx,
-            MsgSplitter splitter, string label, int dc, bool isMedia)
+            NetworkStream cltStream, RawWebSocket ws, CryptoCtx ctx, MsgSplitter splitter)
         {
             Task upTask = Task.Run(async delegate
             {
@@ -1598,10 +2105,10 @@ namespace ZapretTgWsProxy
                             }
                             break;
                         }
-                        byte[] plain = ctx.CltDec.Update(buf, 0, n);
-                        byte[] reenc = ctx.TgEnc.Update(plain, 0, plain.Length);
                         if (splitter != null)
                         {
+                            byte[] plain = ctx.CltDec.Update(buf, 0, n);
+                            byte[] reenc = ctx.TgEnc.Update(plain, 0, plain.Length);
                             List<byte[]> parts = splitter.Split(reenc, plain);
                             if (parts.Count == 1)
                                 await ws.SendBinaryAsync(parts[0]).ConfigureAwait(false);
@@ -1610,7 +2117,11 @@ namespace ZapretTgWsProxy
                         }
                         else
                         {
-                            await ws.SendBinaryAsync(reenc).ConfigureAwait(false);
+                            ctx.CltDec.UpdateInPlace(buf, 0, n);
+                            ctx.TgEnc.UpdateInPlace(buf, 0, n);
+                            byte[] chunk = new byte[n];
+                            Buffer.BlockCopy(buf, 0, chunk, 0, n);
+                            await ws.SendBinaryAsync(chunk).ConfigureAwait(false);
                         }
                     }
                 }
@@ -1628,19 +2139,26 @@ namespace ZapretTgWsProxy
                             break;
                         if (frame.Length == 0)
                             continue;
-                        byte[] plain = ctx.TgDec.Update(frame, 0, frame.Length);
-                        byte[] reenc = ctx.CltEnc.Update(plain, 0, plain.Length);
-                        await cltStream.WriteAsync(reenc, 0, reenc.Length).ConfigureAwait(false);
+                        ctx.TgDec.UpdateInPlace(frame, 0, frame.Length);
+                        ctx.CltEnc.UpdateInPlace(frame, 0, frame.Length);
+                        await cltStream.WriteAsync(frame, 0, frame.Length).ConfigureAwait(false);
                         await cltStream.FlushAsync().ConfigureAwait(false);
                     }
                 }
                 catch { }
             });
 
-            await Task.WhenAny(upTask, downTask).ConfigureAwait(false);
-            try { ws.Dispose(); } catch { }
+            Task first = await Task.WhenAny(upTask, downTask).ConfigureAwait(false);
+            if (first == upTask && !downTask.IsCompleted)
+            {
+                // Allow brief drain of server responses on TCP half-close from client
+                await Task.WhenAny(downTask, Task.Delay(1200)).ConfigureAwait(false);
+            }
+            try { ws.CloseTransport(); } catch { }
             try { cltStream.Close(); } catch { }
-            try { await Task.WhenAny(Task.WhenAll(upTask, downTask), Task.Delay(1500)).ConfigureAwait(false); } catch { }
+            // Ensure both tasks fully exit before disposing ws and before caller disposes CryptoCtx
+            try { await Task.WhenAll(upTask, downTask).ConfigureAwait(false); } catch { }
+            try { ws.Dispose(); } catch { }
         }
 
         private async Task BridgeTcpFallbackAsync(
@@ -1649,14 +2167,19 @@ namespace ZapretTgWsProxy
             using (TcpClient remote = new TcpClient())
             {
                 remote.NoDelay = true;
-                Task conn = remote.ConnectAsync(dstIp, port);
-                using (CancellationTokenSource fbCts = new CancellationTokenSource())
+                RawWebSocket.EnableTcpKeepAlive(remote);
+                try
                 {
-                    if (await Task.WhenAny(conn, Task.Delay(3500, fbCts.Token)).ConfigureAwait(false) != conn)
-                        return;
-                    fbCts.Cancel();
+                    await TaskTimeoutHelper.WaitWithTimeoutAsync(
+                        remote.ConnectAsync(dstIp, port),
+                        3500,
+                        "TCP fallback connect timeout",
+                        delegate { remote.Close(); }).ConfigureAwait(false);
                 }
-                await conn.ConfigureAwait(false);
+                catch (System.TimeoutException)
+                {
+                    return;
+                }
 
                 NetworkStream remStream = remote.GetStream();
                 await remStream.WriteAsync(relayInit, 0, relayInit.Length).ConfigureAwait(false);
@@ -1671,9 +2194,9 @@ namespace ZapretTgWsProxy
                         {
                             int n = await cltStream.ReadAsync(b, 0, b.Length).ConfigureAwait(false);
                             if (n <= 0) break;
-                            byte[] p = ctx.CltDec.Update(b, 0, n);
-                            byte[] c = ctx.TgEnc.Update(p, 0, p.Length);
-                            await remStream.WriteAsync(c, 0, c.Length).ConfigureAwait(false);
+                            ctx.CltDec.UpdateInPlace(b, 0, n);
+                            ctx.TgEnc.UpdateInPlace(b, 0, n);
+                            await remStream.WriteAsync(b, 0, n).ConfigureAwait(false);
                         }
                     }
                     catch { }
@@ -1688,18 +2211,22 @@ namespace ZapretTgWsProxy
                         {
                             int n = await remStream.ReadAsync(b, 0, b.Length).ConfigureAwait(false);
                             if (n <= 0) break;
-                            byte[] p = ctx.TgDec.Update(b, 0, n);
-                            byte[] c = ctx.CltEnc.Update(p, 0, p.Length);
-                            await cltStream.WriteAsync(c, 0, c.Length).ConfigureAwait(false);
+                            ctx.TgDec.UpdateInPlace(b, 0, n);
+                            ctx.CltEnc.UpdateInPlace(b, 0, n);
+                            await cltStream.WriteAsync(b, 0, n).ConfigureAwait(false);
                         }
                     }
                     catch { }
                 });
 
-                await Task.WhenAny(up, down).ConfigureAwait(false);
+                Task first = await Task.WhenAny(up, down).ConfigureAwait(false);
+                if (first == up && !down.IsCompleted)
+                {
+                    await Task.WhenAny(down, Task.Delay(800)).ConfigureAwait(false);
+                }
                 try { remStream.Close(); } catch { }
                 try { cltStream.Close(); } catch { }
-                try { await Task.WhenAny(Task.WhenAll(up, down), Task.Delay(250)).ConfigureAwait(false); } catch { }
+                try { await Task.WhenAll(up, down).ConfigureAwait(false); } catch { }
             }
         }
 
@@ -1830,6 +2357,7 @@ namespace ZapretTgWsProxy
         {
             ServiceName = "zapret-tgws";
             CanStop = true;
+            CanShutdown = true;
             CanPauseAndContinue = false;
             AutoLog = false;
             _engine = engine;
@@ -1852,19 +2380,21 @@ namespace ZapretTgWsProxy
         {
             _engine.Stop();
         }
+
+        protected override void OnShutdown()
+        {
+            _engine.Stop();
+        }
     }
 
     internal static class Program
     {
         private static int Main(string[] args)
         {
-            try { ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12 | (SecurityProtocolType)0x3000; }
-            catch { ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12; }
-
             string exeDir = AppDomain.CurrentDomain.BaseDirectory;
             string rootDir = Path.GetFullPath(Path.Combine(exeDir, ".."));
             string defaultConf = Path.Combine(rootDir, "utils", "tgws_proxy.conf");
-            string defaultLog = Path.Combine(exeDir, "tg-ws-proxy.log");
+            string defaultLog = Path.Combine(exeDir, "logs", "tg-ws-proxy.log");
 
             TgWsProxyEngine engine = new TgWsProxyEngine();
             engine.LogFile = defaultLog;
@@ -1900,9 +2430,25 @@ namespace ZapretTgWsProxy
                     {
                         int dcNum;
                         if (int.TryParse(dcIp.Substring(0, colon), out dcNum))
-                            engine.DcRedirects[dcNum] = dcIp.Substring(colon + 1);
+                        {
+                            if (!engine.AddUserDcRedirect(dcNum, dcIp.Substring(colon + 1)))
+                            {
+                                Console.Error.WriteLine("[ERROR] Invalid --dc-ip value: " + dcIp);
+                                return 2;
+                            }
+                        }
                     }
                 }
+            }
+
+            try
+            {
+                engine.FinalizeConfig();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("[ERROR] Configuration error: " + ex.Message);
+                return 2;
             }
 
             if (healthCheck)
@@ -1918,13 +2464,23 @@ namespace ZapretTgWsProxy
 
             engine.Start();
             Console.WriteLine("Press Ctrl+C to stop...");
-            ManualResetEvent quitEvent = new ManualResetEvent(false);
-            Console.CancelKeyPress += delegate(object sender, ConsoleCancelEventArgs e)
+            using (ManualResetEvent quitEvent = new ManualResetEvent(false))
             {
-                e.Cancel = true;
-                quitEvent.Set();
-            };
-            quitEvent.WaitOne();
+                ConsoleCancelEventHandler cancelHandler = delegate(object sender, ConsoleCancelEventArgs e)
+                {
+                    e.Cancel = true;
+                    try { quitEvent.Set(); } catch { }
+                };
+                Console.CancelKeyPress += cancelHandler;
+                try
+                {
+                    quitEvent.WaitOne();
+                }
+                finally
+                {
+                    Console.CancelKeyPress -= cancelHandler;
+                }
+            }
             engine.Stop();
             return 0;
         }

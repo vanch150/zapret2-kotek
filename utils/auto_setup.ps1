@@ -6,9 +6,9 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'Continue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-if (-not $Root) { $Root = $env:Z2_ROOT }
-if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
-try { $Root = [System.IO.Path]::GetFullPath($Root.Trim('"', "'")).TrimEnd('\', '/') + '\' } catch { $Root = $Root.Trim('"', "'", '\', '/') + '\' }
+$commonPath = Join-Path $PSScriptRoot 'common.ps1'
+if (Test-Path -LiteralPath $commonPath) { . $commonPath }
+$Root = Resolve-Z2Root $Root
 $env:Z2_ROOT = $Root
 
 # Quick silent GitHub release check (1-click auto-update for family/friends)
@@ -59,11 +59,15 @@ function Update-IpsetAndHosts([bool]$RestartServiceOnUpdate = $false) {
 if (-not [Console]::IsOutputRedirected) { try { Clear-Host } catch {} }
 Write-Host ''
 Write-Host '  ==================================================================' -ForegroundColor Cyan
-$verHdr = if (Test-Path -LiteralPath (Join-Path $Root 'utils\version.txt')) { (Get-Content -LiteralPath (Join-Path $Root 'utils\version.txt') -TotalCount 1).Trim() } else { '1.0.0' }
+$TestTargets = @(Get-Z2Targets -Root $Root -Mode 'CORE')
+$TestUrls = @($TestTargets | ForEach-Object { $_.Url })
+$ytTotal  = @($TestTargets | Where-Object { $_.Cat -eq 'YT' }).Count
+$dcTotal  = @($TestTargets | Where-Object { $_.Cat -eq 'DC' }).Count
+$verHdr = Get-Z2Version $Root
 Write-Host "       ZAPRET2 KOTEK v$verHdr — АВТОНАСТРОЙКА (1 КЛИК)      " -ForegroundColor Cyan
 Write-Host '  ==================================================================' -ForegroundColor Cyan
 Write-Host '  Полный автомат: обновление списков IPSet и Hosts, подбор UDP-фейка,' -ForegroundColor Gray
-Write-Host '  тест всех базовых стратегий по 16 целям, запуск служб и прокси Telegram' -ForegroundColor Gray
+Write-Host "  тест всех базовых стратегий по $($TestUrls.Count) целям из targets.txt, запуск служб и прокси Telegram" -ForegroundColor Gray
 Write-Host '  ------------------------------------------------------------------'
 
 $script:KotekTop = -1
@@ -86,7 +90,7 @@ $script:KotekSprites = @(
     ),
     @(
         '          /\_____/\      Котек тестирует стратегии!         ',
-        '         /  ^   ^  \ /   Проверяем обход по 16 целям        ',
+        '         /  ^   ^  \ /   Проверяем обход по всем целям      ',
         '        ( ==  w  == )    YouTube, Discord и Telegram...     ',
         '         )         (   ~                                    ',
         '        (  (     )  )                                       '
@@ -116,6 +120,10 @@ function Update-Kotek([int]$forceFrame = -1) {
 foreach ($ln in $script:KotekSprites[0]) { Write-Host $ln -ForegroundColor Cyan }
 for ($k = 0; $k -lt 4; $k++) { Update-Kotek $k; Start-Sleep -Milliseconds 160 }
 
+$preBenchSvc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+$wasRunningBeforeBench = ($null -ne $preBenchSvc -and $preBenchSvc.Status -eq 'Running')
+if ($null -ne $preBenchSvc) { try { $preBenchSvc.Dispose() } catch {} }
+
 # [0/5] Path Safety Check (Downloads / OneDrive / Spaces / Parens / Cyrillic)
 $needsMove = ($Root -notmatch '^(?i)C:\\Zapret2\\?$') -and (
     ($Root -match '(?i)\\(Downloads|Desktop|OneDrive|Temp)\\') -or
@@ -136,20 +144,28 @@ if ($needsMove -and -not $NonInteractive) {
         Get-Process -Name 'winws2','winws','tg-ws-proxy' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 400
         if (-not (Test-Path -LiteralPath $targetRoot)) { New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null }
+        $global:LASTEXITCODE = 0
         & "$env:SystemRoot\System32\robocopy.exe" ($Root.TrimEnd("\")) ($targetRoot.TrimEnd("\")) /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
-        $Root = $targetRoot
-        $env:Z2_ROOT = $Root
-        $ListsDir = Join-Path $Root 'lists'
-        Write-Host '  [OK] Сборка перенесена в C:\Zapret2 (дальнейшая установка идёт оттуда)' -ForegroundColor Green
+        if ($LASTEXITCODE -ge 8) {
+            Write-Host "  [!] Ошибка переноса файлов в C:\Zapret2 (robocopy exit=$LASTEXITCODE) — продолжаю из текущей папки." -ForegroundColor Yellow
+        } else {
+            $Root = $targetRoot
+            $env:Z2_ROOT = $Root
+            $ListsDir = Join-Path $Root 'lists'
+            Write-Host '  [OK] Сборка перенесена в C:\Zapret2 (дальнейшая установка идёт оттуда)' -ForegroundColor Green
+        }
     }
 }
 
 # [1/5] System Prep, Legacy Zapret1/WinDivert Cleanup & Lists Auto-Update
 Write-Host "`n  [1/5] Подготовка системы, очистка старых драйверов и обновление списков..." -ForegroundColor Yellow
 $legacyFound = @()
-foreach ($oldSvc in @('zapret', 'zapret2', 'discordfix_zapret', 'winws1', 'GoodbyeDPI')) {
+if (Get-Service -Name 'zapret' -ErrorAction SilentlyContinue) {
+    Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
+}
+foreach ($oldSvc in @('zapret2', 'discordfix_zapret', 'winws1', 'GoodbyeDPI')) {
     if (Get-Service -Name $oldSvc -ErrorAction SilentlyContinue) {
-        if ($oldSvc -ne 'zapret') { $legacyFound += $oldSvc }
+        $legacyFound += $oldSvc
         Stop-Service -Name $oldSvc -Force -ErrorAction SilentlyContinue
         Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "delete $oldSvc" -WindowStyle Hidden -Wait | Out-Null
     }
@@ -165,8 +181,29 @@ if ($legacyFound.Count -gt 0) {
 }
 & netsh.exe interface tcp set global timestamps=enabled >$null 2>&1
 $rootCleanAcl = $Root.TrimEnd('\')
-if ($rootCleanAcl -ieq 'C:\Zapret2') {
+if ($rootCleanAcl -notmatch '(?i)\\(Users|Downloads|Desktop|OneDrive|Temp)(\\|$)') {
+    & icacls.exe "$rootCleanAcl" /setowner "*S-1-5-32-544" /T /C /Q >$null 2>&1
     & icacls.exe "$rootCleanAcl" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" /grant:r "*S-1-5-32-544:(OI)(CI)F" /grant:r "*S-1-5-32-545:(OI)(CI)RX" /T /C /Q >$null 2>&1
+    # Restore minimal NetworkService (*S-1-5-20) rights for zapret-tgws
+    $asUtils = Join-Path $rootCleanAcl 'utils'
+    $asBin   = Join-Path $rootCleanAcl 'bin'
+    $asLogs  = Join-Path $asBin 'logs'
+    $asExe   = Join-Path $asBin 'tg-ws-proxy.exe'
+    $asConf  = Join-Path $asUtils 'tgws_proxy.conf'
+    & icacls.exe "$rootCleanAcl" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1
+    if (Test-Path -LiteralPath $asUtils) { & icacls.exe "$asUtils" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asBin)   { & icacls.exe "$asBin"   /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asExe)   { & icacls.exe "$asExe"   /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asConf)  { & icacls.exe "$asConf"  /L /grant:r "*S-1-5-20:(R)"  /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asBin) {
+        if (-not (Test-Path -LiteralPath $asLogs)) { try { New-Item -ItemType Directory -Path $asLogs -Force | Out-Null } catch {} }
+        if (Test-Path -LiteralPath $asLogs) {
+            & icacls.exe "$asLogs" /L /grant:r "*S-1-5-20:(OI)(CI)(M)" /Q >$null 2>&1
+            Get-ChildItem -LiteralPath $asLogs -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                if (($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) { & icacls.exe $_.FullName /L /reset /Q >$null 2>&1 }
+            }
+        }
+    }
 } else {
     & icacls.exe "$rootCleanAcl" /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C /Q >$null 2>&1
 }
@@ -190,8 +227,8 @@ if (-not (Test-Path -LiteralPath $pAuto)) {
 }
 & icacls.exe $pAuto /grant "*S-1-5-18:(M)" /grant "*S-1-5-32-544:(M)" >$null 2>&1
 
-[System.IO.File]::WriteAllText((Join-Path $Root 'utils\autohostlist.enabled'), "1`n")
-[System.IO.File]::WriteAllText((Join-Path $Root 'utils\warp_unblock.enabled'), "1`n")
+[System.IO.File]::WriteAllText((Join-Path $Root 'utils\autohostlist.enabled'), "1`r`n", $utf8NoBom)
+[System.IO.File]::WriteAllText((Join-Path $Root 'utils\warp_unblock.enabled'), "1`r`n", $utf8NoBom)
 
 $initialIpsetUpdated = Update-IpsetAndHosts $false
 
@@ -200,11 +237,9 @@ $initialIpsetUpdated = Update-IpsetAndHosts $false
 Write-Host "`n  [2/5] Подбор оптимального UDP-фейка для голоса Discord и игр..." -ForegroundColor Yellow
 & (Join-Path $Root 'utils\fake_selector.ps1') -Action auto -Root $Root
 
-# [3/5] Benchmark All 8 Core Strategies Across 8 Targets
-Write-Host "`n  [3/5] (=^.^=) Котек тестирует стратегии на вашем провайдере..." -ForegroundColor Yellow
-& sc.exe stop zapret >$null 2>&1
-Get-Process -Name winws2,winws -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 400
+# [3/5] Benchmark Core Strategies
+Write-Host "`n  [3/5] (=^.^=) Котек тестирует стратегии на вашем провайдере ($($TestUrls.Count) целей)..." -ForegroundColor Yellow
+Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
 
 $Candidates = @(
     @{ File = 'general (ALT).bat';            Bonus = 0 },
@@ -232,7 +267,7 @@ foreach ($searchDir in @($StratDir, $Root)) {
 }
 $PrimaryCount = $Candidates.Count
 $ArchDir = Join-Path $Root 'configs_archive'
-$archBackups = @('custom_oob_ts.bat', 'custom_delayed_split.bat', 'general (ALT11).bat', 'general (ALT12).bat', 'general (FAKE TLS AUTO ALT2).bat')
+$archBackups = @('custom_oob_ts.bat', 'custom_delayed_split.bat', 'general (FAKE TLS AUTO ALT2).bat')
 if (Test-Path -LiteralPath $ArchDir) {
     foreach ($ab in $archBackups) {
         if ((Test-Path -LiteralPath (Join-Path $ArchDir $ab)) -and ($knownFiles -notcontains $ab.ToLowerInvariant())) {
@@ -242,27 +277,14 @@ if (Test-Path -LiteralPath $ArchDir) {
     }
 }
 
-# Load CORE targets from unified utils/targets.txt (fallback to built-in 16 targets)
-$TestUrls = New-Object System.Collections.Generic.List[string]
-$tFile = Join-Path $Root 'utils\targets.txt'
-if (Test-Path -LiteralPath $tFile) {
-    foreach ($tl in (Get-Content -LiteralPath $tFile -Encoding UTF8)) {
-        $tt = $tl.Trim()
-        if (-not $tt -or $tt.StartsWith('#')) { continue }
-        $tp = $tt -split '\|'
-        if ($tp.Count -ge 3 -and $tp[1].Trim().ToUpperInvariant() -eq 'CORE') {
-            $TestUrls.Add($tp[2].Trim())
-        }
-    }
-}
-if ($TestUrls.Count -eq 0) {
-    foreach ($u in @('https://www.youtube.com','https://i.ytimg.com/favicon.ico','https://yt3.ggpht.com','https://jnn-pa.googleapis.com','https://redirector.googlevideo.com','https://discord.com','https://discord.com/api/v10/gateway','https://cdn.discordapp.com','https://discord.gg','https://web.telegram.org','https://t.me','https://cloudflare-dns.com','https://one.one.one.one','https://speed.cloudflare.com/__down?bytes=65536','https://7tv.io','https://betterttv.net','https://frankerfacez.com','https://raw.githubusercontent.com')) {
-        $TestUrls.Add($u)
-    }
-}
+$TestTargets = @(Get-Z2Targets -Root $Root -Mode 'CORE')
+$TestUrls = @($TestTargets | ForEach-Object { $_.Url })
+$ytTotal  = @($TestTargets | Where-Object { $_.Cat -eq 'YT' }).Count
+$dcTotal  = @($TestTargets | Where-Object { $_.Cat -eq 'DC' }).Count
 $padHdr = 'X-Pad: ' + ('A' * 3072)
 
 $BestFile = 'general (ALT).bat'
+$BestPath = Join-Path $StratDir $BestFile
 $BestScore = -1
 $BestOkCount = 0; $BestYtOk = $false; $BestDcOk = $false; $BestFreezeOk = $false; $BestAvgMs = 9999
 
@@ -275,8 +297,11 @@ if (Test-Path -LiteralPath $curlExe) {
 
 $invCulture = [System.Globalization.CultureInfo]::InvariantCulture
 
+$probeConf = Join-Path $env:TEMP "z2_auto_$PID.conf"
+$benchCompleted = $false
 $catFrames = @('(=^.^=) .  ', '(=^.^=) .. ', '(=^.^=) ...', '(=-.-=) ...', '(=-.-=)  ~ ', '(=^.^=)    ')
 $catStep = 0
+try {
 foreach ($cand in $Candidates) {
     $catStep++
     $cf = $catFrames[$catStep % $catFrames.Count]
@@ -288,8 +313,9 @@ foreach ($cand in $Candidates) {
 
     $env:Z2_ROOT = $Root
     $env:Z2_BAT = $batPath
-    $env:Z2_CONF = Join-Path $Root 'bin\service.conf'
+    $env:Z2_CONF = $probeConf
     $env:Z2_AUTOHOST = '0'
+    $env:Z2_SKIP_NLM_AUTO = '1'
     $env:BIN = Join-Path $Root 'bin\'
     $env:LISTS = Join-Path $Root 'lists\'
     $env:LUA = Join-Path $Root 'lua\'
@@ -302,17 +328,16 @@ foreach ($cand in $Candidates) {
     try {
         $global:LASTEXITCODE = 0
         & (Join-Path $Root 'utils\build_service_conf.ps1')
-        if ($LASTEXITCODE -ne 0) { throw "exit $LASTEXITCODE" }
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $probeConf)) { throw "exit $LASTEXITCODE" }
     } catch {
         Write-Host ("        - {0,-28} : Ошибка сборки конфига" -f $cand.File) -ForegroundColor Red
         continue
     }
 
-    $confPath = Join-Path $Root 'bin\service.conf'
     $winwsExe = Join-Path $Root 'bin\winws2.exe'
     $proc = $null
     try {
-        $proc = Start-Process -FilePath $winwsExe -ArgumentList "@`"$confPath`"" -WindowStyle Hidden -PassThru
+        $proc = Start-Process -FilePath $winwsExe -ArgumentList "@`"$probeConf`"" -WindowStyle Hidden -PassThru
     } catch {}
     if ($NonInteractive) {
         Write-Host ("[{0}/{1}] Тестирую {2}..." -f $catStep, $Candidates.Count, $cand.File)
@@ -325,6 +350,12 @@ foreach ($cand in $Candidates) {
             Write-Host ("`r  {0} [{1}/{2}] Тестирую {3,-34}" -f $fr, $catStep, $Candidates.Count, $cand.File) -NoNewline -ForegroundColor Cyan
             Start-Sleep -Milliseconds 280
         }
+    }
+    if ($null -eq $proc -or $proc.HasExited) {
+        Write-Host ("`r" + (" " * 78) + "`r") -NoNewline
+        Write-Host ("        - {0,-28} : [X] winws2.exe упал при старте" -f $cand.File) -ForegroundColor Red
+        Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
+        continue
     }
 
     $okCount = 0
@@ -361,7 +392,7 @@ foreach ($cand in $Candidates) {
         }
     }
 
-    $padOk = $false; $dl16kOk = $false; $canaryOk = $false
+    $dl16kOk = $false; $canaryOk = $false
     foreach ($line in $rawLines) {
         $tr = $line.Trim()
         if (-not $tr) { continue }
@@ -379,7 +410,6 @@ foreach ($cand in $Candidates) {
                 $totalMs += ($secVal * 1000.0)
             }
             if ($uEff -match 'speed\.cloudflare\.com' -and $dlBytes -ge 32768) { $dl16kOk = $true }
-            if ($uEff -match 'one\.one\.one\.one|cloudflare-dns\.com') { $padOk = $true }
             if ($uEff -match 'youtube\.com|ytimg\.com|ggpht\.com|googleapis\.com|googlevideo\.com') { $ytHits++ }
             if ($uEff -match 'discord\.com|discordapp\.com|discord\.gg') { $dcHits++ }
             if ($uEff -match 'githubusercontent\.com|github\.com') { $canaryOk = $true }
@@ -388,10 +418,9 @@ foreach ($cand in $Candidates) {
     $freezeOk = $dl16kOk
 
     if ($proc -and -not $proc.HasExited) {
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        try { $proc.Kill(); [void]$proc.WaitForExit(3000) } catch {}
     }
-    Get-Process -Name winws2 -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 280
+    Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
 
     $avgMs = if ($okCount -gt 0) { [int][Math]::Round($totalMs / $okCount) } else { 3000 }
     $ytOk = ($ytHits -ge 2)
@@ -413,12 +442,13 @@ foreach ($cand in $Candidates) {
             $prevSc = Get-Content -LiteralPath $scFile -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($prevSc) { foreach ($pr in $prevSc.PSObject.Properties) { $scMap[$pr.Name] = $pr.Value } }
         }
-        $scMap[$cand.File] = [PSCustomObject]@{ ok=$okCount; total=$TestUrls.Count; ms=$avgMs; yt=$ytOk; dc=$dcOk; ytHits=$ytHits; ytTotal=5; dcHits=$dcHits; dcTotal=4; freeze=$freezeOk; ts=(Get-Date -Format 'yyyy-MM-dd HH:mm') }
+        $scMap[$cand.File] = [PSCustomObject]@{ ok=$okCount; total=$TestUrls.Count; ms=$avgMs; yt=$ytOk; dc=$dcOk; ytHits=$ytHits; ytTotal=$ytTotal; dcHits=$dcHits; dcTotal=$dcTotal; freeze=$freezeOk; ts=(Get-Date -Format 'yyyy-MM-dd HH:mm') }
         [System.IO.File]::WriteAllText($scFile, ($scMap | ConvertTo-Json -Depth 4), $utf8NoBom)
     } catch {}
     if ($score -gt $BestScore) {
         $BestScore = $score
         $BestFile = $cand.File
+        $BestPath = $batPath
         $BestOkCount = $okCount
         $BestYtOk = $ytOk
         $BestDcOk = $dcOk
@@ -435,6 +465,24 @@ foreach ($cand in $Candidates) {
             Write-Host '        [*] Основные стратегии не дали 85%+ с 64КБ — подключаю резервные из configs_archive\...' -ForegroundColor Yellow
         }
     }
+}
+$benchCompleted = $true
+} finally {
+    $env:Z2_SKIP_NLM_AUTO = $null
+    Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
+    if (Test-Path -LiteralPath $probeConf) { Remove-Item -LiteralPath $probeConf -Force -ErrorAction SilentlyContinue }
+    if (-not $benchCompleted -and $wasRunningBeforeBench) {
+        Start-Service -Name 'zapret' -ErrorAction SilentlyContinue
+    }
+}
+
+if ($BestScore -lt 0 -or $BestOkCount -le 0) {
+    Write-Host "`n  [X] Ни одна стратегия не смогла запуститься во время тестирования!" -ForegroundColor Red
+    if ($wasRunningBeforeBench) {
+        Write-Host '  [*] Восстанавливаю прежнюю службу zapret...' -ForegroundColor Yellow
+        Start-Service -Name 'zapret' -ErrorAction SilentlyContinue
+    }
+    exit 1
 }
 
 $bestPct = if ($TestUrls.Count -gt 0) { [int][Math]::Round(100.0 * $BestOkCount / $TestUrls.Count) } else { 0 }
@@ -464,31 +512,36 @@ if (Test-Path -LiteralPath $gfFile) {
 $env:GameFilterTCP = $gfTcp
 $env:GameFilterUDP = $gfUdp
 $env:GameFilter = if ($gfTcp -ne '12') { $gfTcp } else { $gfUdp }
+$winwsExe = Join-Path $Root 'bin\winws2.exe'
+$confWin  = Join-Path $Root 'bin\service.conf'
+$tmpConfA = Join-Path $Root "bin\service.conf.tmp_$PID"
+$bakConfA = Join-Path $Root "bin\service.conf.bak_$PID"
+$hadOldConfA = Test-Path -LiteralPath $confWin
 $env:Z2_ROOT = $Root
-$env:Z2_BAT = Join-Path $Root $BestFile
-$env:Z2_CONF = Join-Path $Root 'bin\service.conf'
+$env:Z2_BAT = if ($BestPath -and (Test-Path -LiteralPath $BestPath)) { $BestPath } else { Join-Path $StratDir $BestFile }
+$env:Z2_CONF = $tmpConfA
 $env:Z2_AUTOHOST = '1'
 $env:BIN = Join-Path $Root 'bin\'
 $env:LISTS = Join-Path $Root 'lists\'
 $env:LUA = Join-Path $Root 'lua\'
 $env:DISCORD_FAKE = Join-Path $Root 'bin\ACTIVE_DISCORD_UDP.bin'
 $env:GAME_FAKE = Join-Path $Root 'bin\ACTIVE_GAME_UDP.bin'
+$global:LASTEXITCODE = 0
 & (Join-Path $Root 'utils\build_service_conf.ps1')
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $tmpConfA)) {
+    if (Test-Path -LiteralPath $tmpConfA) { Remove-Item -LiteralPath $tmpConfA -Force -ErrorAction SilentlyContinue }
+    Write-Host "        [X] ОШИБКА сборки bin\service.conf для $BestFile (код $LASTEXITCODE)" -ForegroundColor Red
+    if ($wasRunningBeforeBench) { Start-Service -Name 'zapret' -ErrorAction SilentlyContinue }
+    exit 1
+}
+if ($hadOldConfA) { Copy-Item -LiteralPath $confWin -Destination $bakConfA -Force -ErrorAction SilentlyContinue }
+Move-Item -LiteralPath $tmpConfA -Destination $confWin -Force -ErrorAction Stop
 
-$winwsExe = Join-Path $Root 'bin\winws2.exe'
-$confWin  = Join-Path $Root 'bin\service.conf'
 $binEscaped = "\`"$winwsExe\`" @\`"$confWin\`""
 $svcZPre = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
 $svcZExists = ($null -ne $svcZPre)
-if ($svcZExists) {
-    if ($svcZPre.Status -ne 'Stopped') {
-        Stop-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
-        try { $svcZPre.WaitForStatus('Stopped', [TimeSpan]::FromSeconds(5)) } catch { Start-Sleep -Milliseconds 700 }
-    }
-    try { $svcZPre.Dispose() } catch {}
-}
-Get-Process -Name 'winws2' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-Start-Sleep -Milliseconds 250
+if ($svcZPre) { try { $svcZPre.Dispose() } catch {} }
+Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
 if ($svcZExists) {
     $pCfgA = Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "config zapret binPath= `"$binEscaped`" DisplayName= `"zapret`" start= auto" -WindowStyle Hidden -Wait -PassThru
     if ($pCfgA.ExitCode -ne 0) {
@@ -503,16 +556,21 @@ Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "start z
 Start-Sleep -Milliseconds 900
 
 $stratShort = [System.IO.Path]::GetFileNameWithoutExtension($BestFile)
-& reg.exe add "HKLM\System\CurrentControlSet\Services\zapret" /v zapret-discord-youtube /t REG_SZ /d $stratShort /f >$null 2>&1
-
 $svcZapret = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
 $winwsProc = Get-Process -Name 'winws2' -ErrorAction SilentlyContinue
 $zapretOk = ($null -ne $svcZapret -and $svcZapret.Status -eq 'Running' -and $null -ne $winwsProc)
 if ($zapretOk) {
+    & reg.exe add "HKLM\System\CurrentControlSet\Services\zapret" /v zapret-discord-youtube /t REG_SZ /d $stratShort /f >$null 2>&1
+    if (Test-Path -LiteralPath $bakConfA) { Remove-Item -LiteralPath $bakConfA -Force -ErrorAction SilentlyContinue }
     Write-Host "        [OK] Служба 'zapret' установлена и ЗАПУЩЕНА (winws2.exe активен)." -ForegroundColor Green
 } else {
     $stText = if ($svcZapret) { $svcZapret.Status } else { 'NOT_INSTALLED' }
     Write-Host "        [X] ОШИБКА: Служба 'zapret' не запущена (статус: $stText)!" -ForegroundColor Red
+    if ($hadOldConfA -and (Test-Path -LiteralPath $bakConfA)) {
+        Move-Item -LiteralPath $bakConfA -Destination $confWin -Force -ErrorAction SilentlyContinue
+        if ($wasRunningBeforeBench) { Start-Service -Name 'zapret' -ErrorAction SilentlyContinue }
+        Write-Host "            Выполнен откат к прежней конфигурации bin\service.conf." -ForegroundColor Yellow
+    }
     Write-Host "            Попробуйте перенести папку в C:\Zapret2 и отключить конфликтующий антивирус/VPN." -ForegroundColor Yellow
 }
 
