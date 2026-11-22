@@ -73,13 +73,16 @@ try {
             if ($ch -match '--parallel') { $curlHasParallel = $true }
         } catch {}
 
+        $heavyRx = 'speed\.cloudflare\.com|^https?://www\.youtube\.com/?$|i\.ytimg\.com/.+maxresdefault\.jpg'
+        $curlFmt = '%{url_effective}|%{http_code}|%{time_total}|%{size_download}|%{exitcode}|%{speed_download}'
         $rawLines = @()
         if ($curlHasParallel) {
             $cArgs = @('-Z', '--parallel-max', '20')
             for ($ui = 0; $ui -lt $TestUrls.Count; $ui++) {
                 if ($ui -gt 0) { $cArgs += '-:' }
                 $u = $TestUrls[$ui]
-                $cArgs += @('-4', '-s', '--max-time', '4', '-w', '%{url_effective}|%{http_code}|%{time_total}|%{size_download}\n', '-o', 'NUL')
+                $tLim = if ($u -match $heavyRx) { '6' } else { '4' }
+                $cArgs += @('-4', '-s', '--max-time', $tLim, '-w', ($curlFmt + '\n'), '-o', 'NUL')
                 if ($u -eq 'https://one.one.one.one' -or $u -eq 'https://cloudflare-dns.com') {
                     $cArgs += @('-H', $padHdr)
                 }
@@ -89,10 +92,11 @@ try {
         } else {
             foreach ($u in $TestUrls) {
                 try {
+                    $tLim = if ($u -match $heavyRx) { '6' } else { '4' }
                     $one = if ($u -eq 'https://one.one.one.one' -or $u -eq 'https://cloudflare-dns.com') {
-                        & $curlExe -4 -s -H $padHdr -o NUL -w '%{url_effective}|%{http_code}|%{time_total}|%{size_download}' --max-time 4 $u 2>$null
+                        & $curlExe -4 -s -H $padHdr -o NUL -w $curlFmt --max-time $tLim $u 2>$null
                     } else {
-                        & $curlExe -4 -s -o NUL -w '%{url_effective}|%{http_code}|%{time_total}|%{size_download}' --max-time 4 $u 2>$null
+                        & $curlExe -4 -s -o NUL -w $curlFmt --max-time $tLim $u 2>$null
                     }
                     if ($one) { $rawLines += $one }
                 } catch {}
@@ -100,7 +104,7 @@ try {
         }
 
         $invCulture = [System.Globalization.CultureInfo]::InvariantCulture
-        $dl16kOk = $false
+        $cfFreezeOk = $false; $ytFreezeOk = $false
         foreach ($line in $rawLines) {
             $tr = $line.Trim()
             if (-not $tr) { continue }
@@ -111,18 +115,36 @@ try {
             $tStr = $parts[2].Trim().Replace(',', '.')
             $dlBytes = 0L
             if ($parts.Count -ge 4) { [void][long]::TryParse($parts[3].Trim(), [ref]$dlBytes) }
+            $secVal = 0.0
+            [void][double]::TryParse($tStr, [System.Globalization.NumberStyles]::Float, $invCulture, [ref]$secVal)
+            $isHeavy = ($uEff -match $heavyRx)
+            $targetMax = if ($isHeavy) { 6.0 } else { 4.0 }
+            $exitOk = $true
+            if ($parts.Count -ge 5 -and $parts[4].Trim() -match '^\d+$') {
+                $exitOk = ($parts[4].Trim() -eq '0')
+            } elseif ($secVal -ge ($targetMax - 0.15)) {
+                $exitOk = $false
+            }
+            $spdBytes = 0.0
+            if ($parts.Count -ge 6) { [void][double]::TryParse($parts[5].Trim().Replace(',', '.'), [System.Globalization.NumberStyles]::Float, $invCulture, [ref]$spdBytes) }
+            if (-not $exitOk) { continue }
             if ($code -match '^(200|204|301|302|307|308|400|403|404)$') {
-                $okCount++
-                $secVal = 0.0
-                if ([double]::TryParse($tStr, [System.Globalization.NumberStyles]::Float, $invCulture, [ref]$secVal)) {
-                    $totalMs += ($secVal * 1000.0)
+                if ($uEff -match '^https?://www\.youtube\.com/?$' -and $code -eq '200' -and $dlBytes -lt 65536) { continue }
+                if ($uEff -match 'speed\.cloudflare\.com') {
+                    $cfMin = if ($uEff -match '262144') { 200000L } else { 50000L }
+                    if ($dlBytes -lt $cfMin) { continue }
+                    $cfFreezeOk = $true
                 }
-                if ($uEff -match 'speed\.cloudflare\.com' -and $dlBytes -ge 32768) { $dl16kOk = $true }
+                $okCount++
+                $totalMs += ($secVal * 1000.0)
+                if (($uEff -match 'i\.ytimg\.com/.+maxresdefault\.jpg' -or $uEff -match '^https?://www\.youtube\.com/?$') -and $code -eq '200' -and $dlBytes -ge 65536 -and $spdBytes -ge 40000) {
+                    $ytFreezeOk = $true
+                }
                 if ($uEff -match 'youtube\.com|ytimg\.com|ggpht\.com|googleapis\.com|googlevideo\.com') { $ytHits++ }
                 if ($uEff -match 'discord\.com|discordapp\.com|discord\.gg') { $dcHits++ }
             }
         }
-        $freezeOk = $dl16kOk
+        $freezeOk = ($cfFreezeOk -and $ytFreezeOk)
 
         if ($proc -and -not $proc.HasExited) {
             try { $proc.Kill(); [void]$proc.WaitForExit(3000) } catch {}
@@ -153,6 +175,8 @@ try {
             dcHits  = $dcHits
             dcTotal = $dcTotal
             freeze  = $freezeOk
+            ytF     = $ytFreezeOk
+            cfF     = $cfFreezeOk
             ts      = (Get-Date -Format 'yyyy-MM-dd HH:mm')
         }
         $json = $map | ConvertTo-Json -Depth 4

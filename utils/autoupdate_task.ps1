@@ -51,9 +51,9 @@ if ($Action -eq 'disable') {
 if ($Action -eq 'enable') {
     $RootTrim = $Root.TrimEnd('\')
 
-    # Refuse registering SYSTEM scheduled task from untrusted user folders (Downloads / Desktop / OneDrive / Temp)
-    if ($RootTrim -match '(?i)\\(Users|Downloads|Desktop|OneDrive|Temp)(\\|$)') {
-        Write-Host "[X] Отказ: автообновление от SYSTEM запрещено из папки '$RootTrim'. Перенесите сборку в C:\Zapret2." -ForegroundColor Red
+    # Refuse registering SYSTEM scheduled task only from temporary/cloud folders (OneDrive / Temp)
+    if ($RootTrim -match '(?i)\\(OneDrive|Temp)(\\|$)') {
+        Write-Host "[X] Отказ: автообновление от SYSTEM запрещено из временной/облачной папки '$RootTrim'. Перенесите сборку в C:\Zapret2." -ForegroundColor Red
         exit 1
     }
 

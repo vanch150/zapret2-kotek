@@ -7,7 +7,8 @@ function Show-Z2MessageDialog {
         [string]$Message = '',
         [ValidateSet('Info','Warning','Error','Question')][string]$Kind = 'Info',
         [ValidateSet('OK','YesNo')][string]$Buttons = 'OK',
-        [string]$AccentHex = '#7BC4A4'
+        [string]$AccentHex = '#7BC4A4',
+        [string]$CloseResult = ''
     )
 
     try { Add-Type -AssemblyName PresentationFramework -ErrorAction SilentlyContinue } catch {}
@@ -171,7 +172,7 @@ public static class WinDwmHelper {
     $TxtMsgBody.Text = $Message
 
     $resState = [PSCustomObject]@{
-        Result = if ($Buttons -eq 'YesNo') { 'No' } else { 'OK' }
+        Result = if ($CloseResult) { $CloseResult } elseif ($Buttons -eq 'YesNo') { 'No' } else { 'OK' }
     }
 
     if ($Buttons -eq 'YesNo') {

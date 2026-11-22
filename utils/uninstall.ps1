@@ -229,7 +229,7 @@ if (Test-Path -LiteralPath $rootTrim) {
         }
     }
 }
-foreach ($rel in @('bin\service.conf', 'bin\logs\tg-ws-proxy.log', 'bin\logs\tg-ws-proxy.log.1', 'bin\tg-ws-proxy.log', 'bin\tg-ws-proxy.log.1', 'utils\.tgws_connected', 'utils\diag_report.txt', 'utils\diag_report.json', 'lists\list-exclude.effective.txt', 'utils\browser_policy.applied', 'utils\browser_policy.backup.json', 'utils\ai_bypass.conf', 'utils\nlm_auto.enabled', 'utils\telemetry.enabled', 'utils\telemetry.id', 'utils\telemetry.state.json', 'utils\telemetry.prompted')) {
+foreach ($rel in @('bin\service.conf', 'bin\logs\tg-ws-proxy.log', 'bin\logs\tg-ws-proxy.log.1', 'bin\tg-ws-proxy.log', 'bin\tg-ws-proxy.log.1', 'utils\.tgws_connected', 'utils\diag_report.txt', 'utils\diag_report.json', 'utils\last_hybrid.json', 'lists\list-exclude.effective.txt', 'utils\browser_policy.applied', 'utils\browser_policy.backup.json', 'utils\ai_bypass.conf', 'utils\nlm_auto.enabled', 'utils\nlm_filter.enabled', 'utils\nlm_filter.names', 'utils\vpn_ifidx.enabled', 'utils\vpn_ifidx.custom', 'utils\vpn_ifidx.names', 'bin\filters\vpn_exclude.txt', 'utils\kotek_folder.ico', 'utils\telemetry.enabled', 'utils\telemetry.id', 'utils\telemetry.state.json', 'utils\telemetry.prompted')) {
     $fp = Join-Path $Root $rel
     if (Test-Path -LiteralPath $fp) {
         Remove-Item -LiteralPath $fp -Force -ErrorAction SilentlyContinue

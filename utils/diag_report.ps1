@@ -11,7 +11,7 @@ $commonPs1 = Join-Path $PSScriptRoot 'common.ps1'
 if (Test-Path -LiteralPath $commonPs1) { . $commonPs1 }
 
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-$verHdr = if (Get-Command Get-Z2Version -ErrorAction SilentlyContinue) { Get-Z2Version $Root } elseif (Test-Path -LiteralPath (Join-Path $Root 'utils\version.txt')) { ([string](Get-Content -LiteralPath (Join-Path $Root 'utils\version.txt') -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)).Trim() } else { '1.0.9' }
+$verHdr = if (Get-Command Get-Z2Version -ErrorAction SilentlyContinue) { Get-Z2Version $Root } elseif (Test-Path -LiteralPath (Join-Path $Root 'utils\version.txt')) { ([string](Get-Content -LiteralPath (Join-Path $Root 'utils\version.txt') -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)).Trim() } else { '1.1.1' }
 $nowStr = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 $safeRoot = if ($env:USERPROFILE) { $Root -ireplace [regex]::Escape($env:USERPROFILE), '%USERPROFILE%' } else { $Root }
 
@@ -141,7 +141,8 @@ if ($hardConflicts.Count -gt 0) {
 }
 
 # 6. VPN & NLM auto-exclude check (reusing nlm_helper.ps1 regex)
-$vpnRx = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|\b(TAP|TUN)\b|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Radmin|Hamachi|ZeroTier|Tailscale|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
+$vpnRx = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|\b(TAP|TUN)\b|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
+$unidNetRx = '^(?i)(Unidentified network|Неопознанная сеть)(\s*\(.*\))?$'
 $nlmAutoOn = Test-Path -LiteralPath (Join-Path $Root 'utils\nlm_auto.enabled')
 $nlmFilterRaw = ''
 $nlmFile = Join-Path $Root 'utils\nlm_filter.enabled'
@@ -189,15 +190,24 @@ if (Test-Path -LiteralPath $winwsExe) {
     }
     $nlmOut = $nlmRawText -split '\r?\n'
     $curN = ''
+    $curId = ''
     foreach ($nl in $nlmOut) {
-        if ($nl -match '^Name\s*:\s*(.+)$') { $curN = $matches[1].Trim() }
-        elseif ($nl -match '^NetID\s*:\s*(\{?[0-9A-Fa-f\-]+\}?)') {
+        if ($nl -match '^Name\s*:\s*(.+)$') {
+            $curN = $matches[1].Trim()
+            $curId = ''
+        } elseif ($nl -match '^NetID\s*:\s*(\{?[0-9A-Fa-f\-]+\}?)') {
             $curId = $matches[1].Trim()
             if ($curN -and ($curN -match $vpnRx)) {
                 if (-not $detectedVpns.Contains($curN)) { $detectedVpns.Add($curN) }
                 if ($curId -and -not $detectedVpnIds.Contains($curId)) { $detectedVpnIds.Add($curId) }
             }
-            $curN = ''
+        } elseif ($nl -match '^Adapter\s*:\s*(.+)$') {
+            $curAd = $matches[1].Trim()
+            if ($curId -and ($curAd -match $vpnRx) -and (-not ($curN -match $unidNetRx))) {
+                $dispAd = if ($curN) { "$curN ($curAd)" } else { $curAd }
+                if (-not $detectedVpns.Contains($dispAd)) { $detectedVpns.Add($dispAd) }
+                if (-not $detectedVpnIds.Contains($curId)) { $detectedVpnIds.Add($curId) }
+            }
         }
     }
 }
@@ -212,30 +222,20 @@ if ($detectedVpns.Count -eq 0) {
 
 if ($detectedVpns.Count -gt 0) {
     $vpnListStr = if ($detectedVpns.Count -eq 1) { '<VPN_PROFILE>' } else { "<VPN_PROFILE> ($($detectedVpns.Count) шт.)" }
-    if ($nlmAutoOn) {
-        Add-DiagCheck 'vpn_nlm' 'VPN и защита NLM' 'OK' "Обнаружен VPN ($vpnListStr) — защищён через Авто-исключение (NLM)" ''
-    } elseif ($nlmManualGuids.Count -gt 0) {
-        $allManualCovered = $false
-        if ($detectedVpnIds.Count -gt 0) {
-            $allManualCovered = $true
-            foreach ($vid in $detectedVpnIds) {
-                if (-not $nlmManualGuids.Contains($vid)) {
-                    $allManualCovered = $false
-                    break
-                }
-            }
-        }
-        if ($allManualCovered) {
-            Add-DiagCheck 'vpn_nlm' 'VPN и защита NLM' 'OK' "Обнаружен VPN ($vpnListStr) — исключён в ручном списке NLM" ''
-        } else {
-            Add-DiagCheck 'vpn_nlm' 'VPN и защита NLM' 'WARN' "Обнаружен VPN ($vpnListStr), но он не входит в ручной список NLM" 'Открой «Настроить VPN» в Настройках Котека и отметь нужный VPN, либо включи Авто-исключение (NLM).'
-        }
+    $vpnIfOnDiag = Test-Path -LiteralPath (Join-Path $Root 'utils\vpn_ifidx.enabled')
+    $vpnIfNmDiag = if (Test-Path -LiteralPath (Join-Path $Root 'utils\vpn_ifidx.names')) { ([string](Get-Content -LiteralPath (Join-Path $Root 'utils\vpn_ifidx.names') -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)).Trim() } else { '' }
+    if ($vpnIfOnDiag) {
+        Add-DiagCheck 'vpn_nlm' 'Исключение VPN (WinDivert)' 'OK' "Обнаружен VPN ($vpnListStr) — исключён через WinDivert (обход на: $(if ($vpnIfNmDiag) { $vpnIfNmDiag } else { 'физ. карты' }))" ''
+    } elseif ($nlmAutoOn) {
+        Add-DiagCheck 'vpn_nlm' 'Исключение VPN' 'WARN' "Обнаружен VPN ($vpnListStr) — активен устаревший NLM (обход засыпает при подключении VPN)" 'Включи «Исключение VPN (WinDivert)» в Настройках Котека.'
     } else {
-        Add-DiagCheck 'vpn_nlm' 'VPN и защита NLM' 'WARN' "Обнаружен VPN ($vpnListStr), а защита NLM выключена" 'Включи «Авто-исключение VPN (NLM)» в Настройках Котека или добавь VPN в ручной список NLM.'
+        Add-DiagCheck 'vpn_nlm' 'Исключение VPN (WinDivert)' 'INFO' "Обнаружен VPN ($vpnListStr) · фильтр интерфейсов выключен" ''
     }
 } else {
-    $nlmTxt = if ($nlmAutoOn) { 'Авто-исключение NLM активно' } elseif ($nlmManualGuids.Count -gt 0) { "Ручной список NLM активен ($($nlmManualGuids.Count))" } else { 'NLM выключен' }
-    Add-DiagCheck 'vpn_nlm' 'VPN и защита NLM' 'OK' "Активных VPN не обнаружено · $nlmTxt" ''
+    $vpnIfOnDiag = Test-Path -LiteralPath (Join-Path $Root 'utils\vpn_ifidx.enabled')
+    $vpnIfNmDiag = if (Test-Path -LiteralPath (Join-Path $Root 'utils\vpn_ifidx.names')) { ([string](Get-Content -LiteralPath (Join-Path $Root 'utils\vpn_ifidx.names') -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)).Trim() } else { '' }
+    $vfTxt = if ($vpnIfOnDiag) { "WinDivert-фильтр активен ($(if ($vpnIfNmDiag) { $vpnIfNmDiag } else { 'физ. карты' }))" } else { 'фильтр интерфейсов выключен' }
+    Add-DiagCheck 'vpn_nlm' 'Исключение VPN (WinDivert)' 'OK' "Активных VPN не обнаружено · $vfTxt" ''
 }
 
 # 7. Windows system proxy (ProxyEnable)
@@ -312,26 +312,44 @@ if ($gfMode -in @('tcp', 'all')) {
     Add-DiagCheck 'filters' 'Режимы фильтров' 'OK' $filterDesc ''
 }
 
-# 10. Network probes (YouTube, Discord, 7TV CDN)
+# 10. Network probes (YouTube, YT HD 120KB, Discord, 7TV CDN, CF 256KB) with exitcode & speed
 $curlExe = "$env:SystemRoot\System32\curl.exe"
-$ytCode = '000'; $dcCode = '000'; $tv7Code = '000'
-if (Test-Path -LiteralPath $curlExe) {
-    $c1 = & $curlExe -4 -s -o NUL -w '%{http_code}' --max-time 4 'https://www.youtube.com' 2>$null
-    $c2 = & $curlExe -4 -s -o NUL -w '%{http_code}' --max-time 4 'https://discord.com' 2>$null
-    $c3 = & $curlExe -4 -s -o NUL -w '%{http_code}' --max-time 4 'https://cdn.7tv.app' 2>$null
-    if ($c1) { $ytCode = [string]$c1 }
-    if ($c2) { $dcCode = [string]$c2 }
-    if ($c3) { $tv7Code = [string]$c3 }
+$invC = [System.Globalization.CultureInfo]::InvariantCulture
+function Invoke-Z2DiagProbe([string]$Url, [int]$MaxSec = 5) {
+    $res = [PSCustomObject]@{ Code='000'; Bytes=0L; Speed=0.0; Exit=99; Ok=$false; Label='000' }
+    if (-not (Test-Path -LiteralPath $curlExe)) { return $res }
+    try {
+        $raw = [string](& $curlExe -4 -s -o NUL -w '%{http_code}|%{size_download}|%{speed_download}|%{exitcode}' --max-time $MaxSec $Url 2>$null)
+        $p = $raw.Trim() -split '\|'
+        if ($p.Count -ge 1 -and $p[0]) { $res.Code = $p[0].Trim() }
+        if ($p.Count -ge 2) { [void][long]::TryParse($p[1].Trim(), [ref]$res.Bytes) }
+        if ($p.Count -ge 3) { [void][double]::TryParse($p[2].Trim().Replace(',', '.'), [System.Globalization.NumberStyles]::Float, $invC, [ref]$res.Speed) }
+        if ($p.Count -ge 4 -and $p[3].Trim() -match '^\d+$') { $res.Exit = [int]$p[3].Trim() } else { $res.Exit = 0 }
+        $kb = [int][Math]::Round($res.Bytes / 1024.0)
+        $kbs = [int][Math]::Round($res.Speed / 1024.0)
+        $res.Label = if ($res.Exit -eq 0) { "$($res.Code) (${kb}KB, ${kbs}KB/s)" } else { "$($res.Code) (e=$($res.Exit), ${kb}KB)" }
+    } catch {}
+    return $res
 }
-$ytOk = ($ytCode -match '^[23]\d\d$')
-$dcOk = ($dcCode -match '^[23]\d\d$')
-$tv7Ok = ($tv7Code -match '^[234]\d\d$')
-if ($ytOk -and $dcOk -and $tv7Ok) {
-    Add-DiagCheck 'probes' 'Доступ к YouTube, Discord и 7TV' 'OK' "YouTube: HTTP $ytCode · Discord: HTTP $dcCode · 7TV CDN: HTTP $tv7Code" ''
-} elseif ($ytOk -and $dcOk -and -not $tv7Ok) {
-    Add-DiagCheck 'probes' 'Доступ к YouTube, Discord и 7TV' 'WARN' "YouTube: HTTP $ytCode · Discord: HTTP $dcCode · 7TV CDN: HTTP $tv7Code" 'YouTube и Discord работают, но 7TV CDN не отвечает. Попробуй другую стратегию или опциональный фикс браузера (QUIC/DoH) в Настройках.'
+$pYt  = Invoke-Z2DiagProbe 'https://www.youtube.com' 6
+$pYtH = Invoke-Z2DiagProbe 'https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg' 6
+$pDc  = Invoke-Z2DiagProbe 'https://discord.com' 4
+$p7tv = Invoke-Z2DiagProbe 'https://cdn.7tv.app' 4
+$pCf  = Invoke-Z2DiagProbe 'https://speed.cloudflare.com/__down?bytes=262144' 6
+
+$ytOk   = ($pYt.Exit -eq 0 -and $pYt.Code -match '^[23]\d\d$' -and ($pYt.Code -ne '200' -or $pYt.Bytes -ge 65536))
+$ytHdOk = ($pYtH.Exit -eq 0 -and $pYtH.Code -eq '200' -and $pYtH.Bytes -ge 65536 -and $pYtH.Speed -ge 40000)
+$dcOk   = ($pDc.Exit -eq 0 -and $pDc.Code -match '^[23]\d\d$')
+$tv7Ok  = ($p7tv.Exit -eq 0 -and $p7tv.Code -match '^[234]\d\d$')
+$cfOk   = ($pCf.Exit -eq 0 -and $pCf.Code -eq '200' -and $pCf.Bytes -ge 200000)
+
+$probeLine = "YouTube: $($pYt.Label) · YT-HD: $($pYtH.Label) · Discord: $($pDc.Label) · 7TV: $($p7tv.Label) · CF256: $($pCf.Label)"
+if ($ytOk -and $ytHdOk -and $dcOk -and $tv7Ok -and $cfOk) {
+    Add-DiagCheck 'probes' 'Доступ к YouTube, Discord, 7TV и скорость' 'OK' $probeLine ''
+} elseif ($ytOk -and $dcOk -and (-not $ytHdOk -or -not $cfOk -or -not $tv7Ok)) {
+    Add-DiagCheck 'probes' 'Доступ к YouTube, Discord, 7TV и скорость' 'WARN' $probeLine 'Часть тяжёлых целей (YT-HD / CF 256KB / 7TV) режется или тормозит. Попробуй другую стратегию (ALT12 / custom_wssize_antifreeze) или отключи QUIC в «Фиксе браузера».'
 } else {
-    Add-DiagCheck 'probes' 'Доступ к YouTube, Discord и 7TV' 'FAIL' "YouTube: HTTP $ytCode · Discord: HTTP $dcCode · 7TV CDN: HTTP $tv7Code" 'Текущая стратегия не пробивает блокировку провайдера. Нажми «Автонастройка» или «Глубокая оптимизация» на главной.'
+    Add-DiagCheck 'probes' 'Доступ к YouTube, Discord, 7TV и скорость' 'FAIL' $probeLine 'Текущая стратегия не пробивает блокировку провайдера. Нажми «Автонастройка» или «Глубокая оптимизация» на главной.'
 }
 
 # 10b. Browsers QUIC/DoH current status (neutral INFO, never alarms)
@@ -343,9 +361,9 @@ if (Test-Path -LiteralPath $bhPs1) {
         $brList = @(Get-Z2BrowserStates)
         if ($brList.Count -gt 0) {
             $parts = @($brList | ForEach-Object { "$($_.Name): $($_.StatusText)" })
-            Add-DiagCheck 'browsers' 'Браузеры (QUIC / DoH)' 'INFO' ($parts -join '  |  ') ''
+            Add-DiagCheck 'browsers' 'Браузеры (QUIC)' 'INFO' ($parts -join '  |  ') ''
         } else {
-            Add-DiagCheck 'browsers' 'Браузеры (QUIC / DoH)' 'INFO' 'Установленные браузеры не обнаружены' ''
+            Add-DiagCheck 'browsers' 'Браузеры (QUIC)' 'INFO' 'Установленные браузеры не обнаружены' ''
         }
     } catch {}
 }
@@ -437,6 +455,19 @@ foreach ($c in $checks) {
 $procs = (Get-Process -Name 'winws2','winws','tg-ws-proxy','AdguardSvc','goodbyedpi' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name -Unique) -join ', '
 [void]$sb.AppendLine("")
 [void]$sb.AppendLine("Processes : $(if ($procs) { $procs } else { 'none' })")
+$telHelperDiag = Join-Path $PSScriptRoot 'telemetry_helper.ps1'
+if (Test-Path -LiteralPath $telHelperDiag) {
+    try {
+        . $telHelperDiag
+        if (Get-Command Get-Z2TelemetrySnapshot -ErrorAction SilentlyContinue) {
+            $diagSnap = Get-Z2TelemetrySnapshot $Root
+            if ($diagSnap) {
+                [void]$sb.AppendLine("--- Tech Snapshot ---")
+                [void]$sb.AppendLine($diagSnap)
+            }
+        }
+    } catch {}
+}
 
 $logPath = Join-Path $Root 'bin\logs\tg-ws-proxy.log'
 if (-not (Test-Path -LiteralPath $logPath)) { $logPath = Join-Path $Root 'bin\tg-ws-proxy.log' }

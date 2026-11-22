@@ -193,8 +193,7 @@ $AutoDoneCard       = $win.FindName('AutoDoneCard')
 $TxtAutoDoneTitle   = $win.FindName('TxtAutoDoneTitle')
 $TxtAutoDoneHints   = $win.FindName('TxtAutoDoneHints')
 $TxtAutoDoneSummary = $win.FindName('TxtAutoDoneSummary')
-$BtnAutoDoneClose   = $win.FindName('BtnAutoDoneClose')
-$BtnAutoDoneStay    = $win.FindName('BtnAutoDoneStay')
+$BtnAutoDoneDismiss = $win.FindName('BtnAutoDoneDismiss')
 $BtnAutoDoneDeep    = $win.FindName('BtnAutoDoneDeep')
 $BtnAutoDoneAutoUpd = $win.FindName('BtnAutoDoneAutoUpd')
 
@@ -207,6 +206,9 @@ $ViewStrats      = $win.FindName('ViewStrats')
 $ViewSettings    = $win.FindName('ViewSettings')
 
 $ListStrategies  = $win.FindName('ListStrategies')
+$BdHybridRecipe  = $win.FindName('BdHybridRecipe')
+$TxtHybridRecipe = $win.FindName('TxtHybridRecipe')
+$TxtHybridScore  = $win.FindName('TxtHybridScore')
 $BtnTabCore      = $win.FindName('BtnTabCore')
 $BtnTabArch      = $win.FindName('BtnTabArch')
 $BtnApplyStrat   = $win.FindName('BtnApplyStrat')
@@ -235,12 +237,7 @@ $ChkTrayMode     = $win.FindName('ChkTrayMode')
 $ChkTrayStartMin = $win.FindName('ChkTrayStartMin')
 $TxtBrowserFixState = $win.FindName('TxtBrowserFixState')
 $BtnBrowserFix   = $win.FindName('BtnBrowserFix')
-$BtnBrowserRevert  = $win.FindName('BtnBrowserRevert')
-$BtnBrowserExpand  = $win.FindName('BtnBrowserExpand')
-$PnlBrowserExpand  = $win.FindName('PnlBrowserExpand')
 $ChkBrowserQuic    = $win.FindName('ChkBrowserQuic')
-$ChkBrowserDoh     = $win.FindName('ChkBrowserDoh')
-$TxtBrowserDohDesc = $win.FindName('TxtBrowserDohDesc')
 $TxtAiStatusLine    = $win.FindName('TxtAiStatusLine')
 $BtnAiServices      = $win.FindName('BtnAiServices')
 $PnlAiServices      = $win.FindName('PnlAiServices')
@@ -356,19 +353,29 @@ function Invoke-Z2TelemetryPromptOnce {
     $fPrompt = Join-Path $Root 'utils\telemetry.prompted'
     $fTel    = Join-Path $Root 'utils\telemetry.enabled'
     $u8nb    = New-Object System.Text.UTF8Encoding($false)
-    if (Test-Path -LiteralPath $fTel) {
-        try { [System.IO.File]::WriteAllText($fPrompt, "2`r`n", $u8nb) } catch {}
-        return
-    }
     if (Test-Path -LiteralPath $fPrompt) {
         $pv = ([string](Get-Content -LiteralPath $fPrompt -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)).Trim()
         if ($pv -match '^[12](\||$)') { return }
     }
 
+    # Pre-enable telemetry by default before showing first-run dialog
+    try {
+        [System.IO.File]::WriteAllText($fTel, "1`r`n", $u8nb)
+        if ($null -ne $ChkTelemetry) { $ChkTelemetry.IsChecked = $true }
+    } catch {}
+
     $nowUnix = [int64]([DateTime]::UtcNow - (New-Object DateTime(1970,1,1,0,0,0,[DateTimeKind]::Utc))).TotalSeconds
-    $msg = "Включить анонимные отчёты, чтобы помогать Котеку становиться лучше?`r`n`r`nОтправляются только версия, название стратегии и коды сбоев (без путей, IP и списков сайтов; не чаще 1 раза в сутки).`r`nМожно в любой момент отключить в Настройках."
-    $ans = Show-Z2MessageDialog -Owner $win -Title 'Помочь развитию Котека ♡' -Message $msg -Kind 'Question' -Buttons 'YesNo' -AccentHex '#E88CA5'
-    if ($ans -eq 'Yes') {
+    $msg = "Оставить включёнными анонимные отчёты, чтобы помогать Котеку становиться лучше?`r`n`r`nОтправляются версия, стратегия, тех-срез и логи при сбоях (без путей, IP и списков сайтов).`r`nЕсли нажмёшь «Нет» — отправка сразу выключится. Изменить выбор можно в любой момент в Настройках."
+    $ans = Show-Z2MessageDialog -Owner $win -Title 'Помочь развитию Котека ♡' -Message $msg -Kind 'Question' -Buttons 'YesNo' -AccentHex '#E88CA5' -CloseResult 'Yes'
+    if ($ans -eq 'No') {
+        try {
+            if (Test-Path -LiteralPath $fTel) { Remove-Item -LiteralPath $fTel -Force -ErrorAction SilentlyContinue }
+            if ($null -ne $ChkTelemetry) { $ChkTelemetry.IsChecked = $false }
+            # Stage 1 + timestamp: at most 1 gentle non-modal pink toast after 30 days, then permanently 2
+            [System.IO.File]::WriteAllText($fPrompt, "1|$nowUnix`r`n", $u8nb)
+            Show-Toast 'Анонимные отчёты отключены. Включить можно в любой момент в Настройках.' $false
+        } catch {}
+    } else {
         try {
             [System.IO.File]::WriteAllText($fPrompt, "2`r`n", $u8nb)
             [System.IO.File]::WriteAllText($fTel, "1`r`n", $u8nb)
@@ -376,12 +383,20 @@ function Invoke-Z2TelemetryPromptOnce {
             Invoke-KotekThankYou
             Show-Toast 'Спасибо ♡ Анонимные отчёты включены!' $false
             if (Get-Command Send-Z2TelemetryEvent -ErrorAction SilentlyContinue) {
-                try { [void](Send-Z2TelemetryEvent -RootPath $Root -Event 'optin' -Strategy $script:ActiveStratName -Code '0') } catch {}
+                try {
+                    $optScore = ''
+                    $optRf = Join-Path $Root 'utils\last_autosetup.json'
+                    if (Test-Path -LiteralPath $optRf) {
+                        $orj = Get-Content -LiteralPath $optRf -Raw -Encoding UTF8 -ErrorAction SilentlyContinue | ConvertFrom-Json
+                        if ($null -ne $orj -and $null -ne $orj.total -and [int]$orj.total -gt 0) {
+                            $optScore = "$($orj.ok)/$($orj.total) ($($orj.pct)%)"
+                        }
+                    }
+                    $optSnap = if (Get-Command Get-Z2TelemetrySnapshot -ErrorAction SilentlyContinue) { Get-Z2TelemetrySnapshot $Root } else { '' }
+                    [void](Send-Z2TelemetryEvent -RootPath $Root -Event 'optin' -Strategy $script:ActiveStratName -Score $optScore -Code '0' -Detail $optSnap)
+                } catch {}
             }
         } catch {}
-    } else {
-        # Stage 1 + timestamp: at most 1 gentle non-modal pink toast after 30 days, then permanently 2
-        try { [System.IO.File]::WriteAllText($fPrompt, "1|$nowUnix`r`n", $u8nb) } catch {}
     }
 }
 
@@ -595,16 +610,14 @@ function Set-Z2BusyUiState([bool]$IsBusy) {
         $BtnTgConnect, $BtnTgToggle, $BtnUdpOpt, $CmbUdpFake, $CmbQuickStrat, $CmbTgMode,
         $CmbIpsetMode, $BtnDiag, $BtnUpdateLists, $BtnCheckUpdate, $BtnUninstall,
         $ChkAutoHost, $ChkWarp, $ChkGameFilter, $ChkKernelFilter, $ChkNlmVpn, $BtnNlmConfig,
-        $BtnBrowserFix, $BtnBrowserRevert, $ChkBrowserQuic, $ChkBrowserDoh, $BtnEditGenUser, $BtnEditExUser,
+        $BtnBrowserFix, $ChkBrowserQuic, $BtnEditGenUser, $BtnEditExUser,
         $BtnAiToggle, $BtnAiProbe, $CmbAiMode, $BtnAiSelAll,
         $ChkAi_gemini, $ChkAi_chatgpt, $ChkAi_claude, $ChkAi_copilot, $ChkAi_grok, $ChkAi_perplexity, $ChkAi_ide_ai, $BtnPause
     )
     foreach ($ctrl in $mutControls) {
         if ($null -ne $ctrl) { $ctrl.IsEnabled = $enabled }
     }
-    if ($enabled -and $script:AiBypassActiveNow -and $null -ne $ChkBrowserDoh) {
-        $ChkBrowserDoh.IsEnabled = $false
-    }
+
 }
 
 function Stop-Z2BgUiWork {
@@ -723,8 +736,7 @@ function Show-Toast([string]$Msg, [bool]$IsError = $false) {
     $StatusRow.Visibility = 'Collapsed'
     $script:ToastHideTick = $script:CatIdx + 14
 }
-$BtnAutoDoneClose.Add_Click({ $win.Close() })
-$BtnAutoDoneStay.Add_Click({ $AutoDoneCard.Visibility = 'Collapsed' })
+if ($null -ne $BtnAutoDoneDismiss) { $BtnAutoDoneDismiss.Add_Click({ $AutoDoneCard.Visibility = 'Collapsed' }) }
 $BtnAutoDoneDeep.Add_Click({
     $AutoDoneCard.Visibility = 'Collapsed'
     Run-ConsoleTool 'utils\deep_optimize.ps1' '-NonInteractive' $false 'Глубокий тест (22 стратегии)' $BtnDeepOpt
@@ -910,6 +922,9 @@ function Switch-Nav([string]$page) {
     $BtnNavHome.Style     = if ($page -eq 'home')     { $win.Resources['NavBtnActive'] } else { $win.Resources['NavBtn'] }
     $BtnNavStrats.Style   = if ($page -eq 'strats')   { $win.Resources['NavBtnActive'] } else { $win.Resources['NavBtn'] }
     $BtnNavSettings.Style = if ($page -eq 'settings') { $win.Resources['NavBtnActive'] } else { $win.Resources['NavBtn'] }
+    if ($page -ne 'home' -and $null -ne $AutoDoneCard) {
+        $AutoDoneCard.Visibility = 'Collapsed'
+    }
     if ($ActiveTaskCard.Visibility -eq 'Visible') {
         $StatusRow.Visibility = if ($page -eq 'home') { 'Collapsed' } else { 'Visible' }
     }
@@ -969,42 +984,162 @@ function Load-Strategies([string]$tab) {
         $script:CurrentItems = $arch
     }
 
+    # Refresh hybrid recipe banner (if utils\last_hybrid.json exists)
+    $hybRecipeDesc = ''
+    $hybFile = Join-Path $Root 'utils\last_hybrid.json'
+    if (Test-Path -LiteralPath $hybFile) {
+        try {
+            $hj = Get-Content -LiteralPath $hybFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue | ConvertFrom-Json
+            if ($null -ne $hj -and $hj.yt) {
+                $hYtS  = [System.IO.Path]::GetFileNameWithoutExtension([string]$hj.yt)
+                $hDcS  = [System.IO.Path]::GetFileNameWithoutExtension([string]$hj.dc)
+                $hWebS = [System.IO.Path]::GetFileNameWithoutExtension([string]$hj.web)
+                $hybRecipeDesc = "YT: $hYtS · DC: $hDcS · WEB: $hWebS"
+                if ($null -ne $BdHybridRecipe -and $null -ne $TxtHybridRecipe) {
+                    if ($script:ActiveStratName -ieq 'custom_auto_synthesized') {
+                        $TxtHybridRecipe.Text = $hybRecipeDesc
+                        if ($null -ne $TxtHybridScore) {
+                            $TxtHybridScore.Text = if ($hj.total -and [int]$hj.total -gt 0) { "$($hj.ok)/$($hj.total) · ~$($hj.ms) мс" } else { '' }
+                        }
+                        $BdHybridRecipe.Visibility = 'Visible'
+                    } else {
+                        $BdHybridRecipe.Visibility = 'Collapsed'
+                    }
+                }
+            }
+        } catch {}
+    } elseif ($null -ne $BdHybridRecipe) {
+        $BdHybridRecipe.Visibility = 'Collapsed'
+    }
+
+    $stratMetaMap = @{
+        'custom_auto_synthesized'  = @('Гибрид',        'Персональный гибрид YouTube + Discord + Web под твоего провайдера')
+        'general (ALT12)'          = @('hostfakesplit', 'Подмена SNI + multisplit — часто лучшая для YouTube 1080p и 7TV')
+        'general (ALT11)'          = @('multisplit',    'Агрессивный fake (tcp_ts) + multisplit seqovl — быстрая универсальная база')
+        'general (ALT)'            = @('fakedsplit',    'Классический fakedsplit + tcp_ts — стабильная база для большинства сетей')
+        'general (ALT7)'           = @('syndata',       'Чистый multisplit seqovl + syndata в TCP SYN (без зависимости от tcp_ts)')
+        'general (FAKE TLS AUTO)'  = @('multidisorder', 'Обратный порядок сегментов + badseq/badack — работает там, где tcp_ts не идёт')
+        'custom_wssize_antifreeze' = @('wssize',        'Антифриз TCP-окна (wssize) + multisplit против 16-КБ шейпинга скорости')
+        'custom_md5_disorder'      = @('tcp_md5',       'fakeddisorder + hostfakesplit с подписью TCP MD5 (без tcp_ts)')
+        'custom_youtube_south'     = @('fakedsplit',    'Оптимизирована под региональные кэши YouTube и южных провайдеров')
+        'custom_domru_spb'         = @('fakedsplit',    'Лёгкий профиль с минимумом фейков и низким пингом (Дом.ру / СПб)')
+        'custom_auto_circular'     = @('circular',      'Авто-ротация 5 механик при сбоях (экспериментальная)')
+        'custom_autottl_hostfake'  = @('autottl',       'hostfakesplit + disorder_after с автоподбором TTL')
+        'custom_oob_ts'            = @('oob',           'Внеполосные TCP-байты (OOB) + tcp_ts')
+        'custom_delayed_split'     = @('tcpseg',        'Отложенная нарезка сегментов (tcpseg / delayed split)')
+        'custom_kyber_tls13'       = @('kyber',         'Фейки с постквантовым TLS 1.3 Kyber + padencap')
+        'custom_ultimate_pro'      = @('комбо',         'Комбинированный тяжёлый профиль для жёстких ТСПУ')
+        'custom_valorant_end'      = @('игровой',       'Щадящий профиль для онлайн-игр и чувствительных античитов')
+    }
+
     $prevSelName = if ($ListStrategies.SelectedItem -and $ListStrategies.SelectedItem.Name) { [string]$ListStrategies.SelectedItem.Name } else { '' }
     $scores = Get-StrategyScores
     $bc = $script:BrushConv
-    $ListStrategies.Items.Clear()
-    $restoreIdx = 0
-    $rowIdx = 0
+    $rowsList = New-Object System.Collections.Generic.List[object]
+
     foreach ($f in $script:CurrentItems) {
-        $stTxt = '—'
-        $bdTxt = ''
-        $tipTxt = 'Ещё не проверялась — выбери и нажми «Проверить»'
-        $stClr = '#646B78'
+        $shortName = [System.IO.Path]::GetFileNameWithoutExtension($f.Name)
+        $isAct = ($script:ActiveStratName -and ($shortName -ieq $script:ActiveStratName))
+        $techTag = ''
+        $descTxt = 'Пользовательская или архивная стратегия обхода'
+        if ($stratMetaMap.ContainsKey($shortName)) {
+            $techTag = $stratMetaMap[$shortName][0]
+            $descTxt = $stratMetaMap[$shortName][1]
+        } elseif ($shortName -match '(?i)ALT\d*') {
+            $techTag = 'Flowseal ALT'
+            $descTxt = 'Альтернативный профиль из коллекции Flowseal'
+        }
+        if ($shortName -ieq 'custom_auto_synthesized' -and $hybRecipeDesc) {
+            $descTxt = $hybRecipeDesc
+        }
+
+        $scoreMain = '—'
+        $pingTxt   = ''
+        $pingVis   = 'Collapsed'
+        $bdTxt     = ''
+        $bdVis     = 'Collapsed'
+        $frVis     = 'Collapsed'
+        $frTxt     = ''
+        $frBg      = '#23262E'
+        $frBorder  = '#343844'
+        $frFg      = '#9CA3AF'
+        $tipTxt    = "$($f.Name)`nЕщё не проверялась — выбери и нажми «Проверить выбранную»"
+        $stClr     = '#646B78'
+        $sortHas   = 0
+        $sortRatio = -1.0
+        $sortFr    = 0
+        $sortMs    = 99999
+
         if ($scores.ContainsKey($f.Name)) {
             $sc = $scores[$f.Name]
-            $okN = [int]$sc.ok; $totN = if ($sc.total) { [int]$sc.total } else { 16 }; $msN = [int]$sc.ms
-            $stTxt = "$okN/$totN · ~${msN} мс"
+            $okN = [int]$sc.ok; $totN = if ($sc.total) { [int]$sc.total } else { 17 }; $msN = [int]$sc.ms
+            $scoreMain = "$okN/$totN"
+            $pingTxt   = "~${msN} мс"
+            $pingVis   = 'Visible'
             $ratio = if ($totN -gt 0) { $okN / [double]$totN } else { 0.0 }
-            if ($ratio -ge 0.65) { $stClr = $AccentLightHex }
-            elseif ($ratio -ge 0.42) { $stClr = '#D9B066' }
+            if ($ratio -ge 0.80) { $stClr = $AccentLightHex }
+            elseif ($ratio -ge 0.55) { $stClr = '#D9B066' }
             else { $stClr = '#D97777' }
             $ytPart = if ($null -ne $sc.ytHits) { "YT $($sc.ytHits)/$($sc.ytTotal)" } else { if ($sc.yt) { 'YT OK' } else { 'YT ✕' } }
             $dcPart = if ($null -ne $sc.dcHits) { "DC $($sc.dcHits)/$($sc.dcTotal)" } else { if ($sc.dc) { 'DC OK' } else { 'DC ✕' } }
             $bdTxt = "$ytPart · $dcPart"
-            $frPart = if ($sc.freeze) { 'OK' } else { 'SLOW' }
+            $bdVis = 'Visible'
+
+            $frVis = 'Visible'
+            if ($sc.freeze) {
+                $frTxt = 'HD OK'; $frBg = '#14261E'; $frBorder = '#25523D'; $frFg = '#6EE7B7'
+            } else {
+                $frTxt = 'SLOW'; $frBg = '#2A2115'; $frBorder = '#5C4421'; $frFg = '#F5B971'
+            }
+            $ytFPart = if ($null -ne $sc.PSObject.Properties['ytF']) { if ($sc.ytF) { 'OK' } else { 'SLOW' } } else { if ($sc.freeze) { 'OK' } else { 'SLOW' } }
+            $cfFPart = if ($null -ne $sc.PSObject.Properties['cfF']) { if ($sc.cfF) { 'OK' } else { 'SLOW' } } else { if ($sc.freeze) { 'OK' } else { 'SLOW' } }
             $tsPart = if ($sc.ts) { $sc.ts } else { '—' }
-            $tipTxt = "$($f.Name)`nИтог: $okN/$totN (~${msN} мс)`n$ytPart | $dcPart | 16-20KB: $frPart`nТест: $tsPart"
+            $tipTxt = "$($f.Name)`nИтог: $okN/$totN (~${msN} мс)`n$ytPart | $dcPart`nYT-HD (120KB): $ytFPart | CF (256KB): $cfFPart`nТест: $tsPart"
+
+            $sortHas   = 1
+            $sortRatio = $ratio
+            $sortFr    = if ($sc.freeze) { 1 } else { 0 }
+            $sortMs    = $msN
         }
-        $rowObj = [PSCustomObject]@{
+
+        $rowsList.Add([PSCustomObject]@{
+            FileObj       = $f
             Name          = $f.Name
+            DisplayName   = $shortName
             FullName      = $f.FullName
+            ActiveVis     = if ($isAct) { 'Visible' } else { 'Collapsed' }
+            TechTag       = $techTag
+            TagVis        = if ($techTag) { 'Visible' } else { 'Collapsed' }
+            DescText      = $descTxt
             BreakdownText = $bdTxt
-            ScoreText     = $stTxt
+            BreakdownVis  = $bdVis
+            FreezeVis     = $frVis
+            FreezeText    = $frTxt
+            FreezeBg      = $bc.ConvertFromString($frBg)
+            FreezeBorder  = $bc.ConvertFromString($frBorder)
+            FreezeFg      = $bc.ConvertFromString($frFg)
+            ScoreMain     = $scoreMain
+            PingText      = $pingTxt
+            PingVis       = $pingVis
+            ScoreText     = if ($pingTxt) { "$scoreMain · $pingTxt" } else { $scoreMain }
             ScoreTip      = $tipTxt
             ScoreBrush    = $bc.ConvertFromString($stClr)
-        }
-        [void]$ListStrategies.Items.Add($rowObj)
-        if ($prevSelName -and $f.Name -ieq $prevSelName) { $restoreIdx = $rowIdx }
+            SortAct       = if ($isAct) { 1 } else { 0 }
+            SortHas       = $sortHas
+            SortRatio     = $sortRatio
+            SortFr        = $sortFr
+            SortMs        = $sortMs
+        })
+    }
+
+    $sortedRows = @($rowsList | Sort-Object @{Expression='SortAct';Descending=$true}, @{Expression='SortHas';Descending=$true}, @{Expression='SortRatio';Descending=$true}, @{Expression='SortFr';Descending=$true}, @{Expression='SortMs';Ascending=$true}, @{Expression='DisplayName';Ascending=$true})
+    $script:CurrentItems = @($sortedRows | ForEach-Object { $_.FileObj })
+    $ListStrategies.Items.Clear()
+    $restoreIdx = 0
+    $rowIdx = 0
+    foreach ($ro in $sortedRows) {
+        [void]$ListStrategies.Items.Add($ro)
+        if ($prevSelName -and $ro.Name -ieq $prevSelName) { $restoreIdx = $rowIdx }
         $rowIdx++
     }
     if ($ListStrategies.Items.Count -gt 0) { $ListStrategies.SelectedIndex = $restoreIdx }
@@ -1137,31 +1272,25 @@ function Refresh-Dashboard {
         }
     }
     $ChkGameFilter.IsChecked = $gfOn
-    $nlmEnFile   = Join-Path $Root 'utils\nlm_filter.enabled'
-    $nlmAutoFile = Join-Path $Root 'utils\nlm_auto.enabled'
-    $nlmNmFile   = Join-Path $Root 'utils\nlm_filter.names'
-    $nlmHasFilter = (Test-Path -LiteralPath $nlmEnFile)
-    $nlmOn = $nlmHasFilter -or (Test-Path -LiteralPath $nlmAutoFile)
-    $ChkNlmVpn.IsChecked = $nlmOn
-    if ($nlmOn) {
-        $nmTxt = if (Test-Path -LiteralPath $nlmNmFile) { ([string](Get-Content -LiteralPath $nlmNmFile -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)).Trim() } else { '' }
+    $vpnIfFlag  = Join-Path $Root 'utils\vpn_ifidx.enabled'
+    $vpnIfNames = Join-Path $Root 'utils\vpn_ifidx.names'
+    $vpnIfOn    = (Test-Path -LiteralPath $vpnIfFlag)
+    $ChkNlmVpn.IsChecked = $vpnIfOn
+    if ($vpnIfOn) {
+        $nmTxt = if (Test-Path -LiteralPath $vpnIfNames) { ([string](Get-Content -LiteralPath $vpnIfNames -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)).Trim() } else { '' }
         if ($nmTxt) {
-            $cleanNms = @($nmTxt -split ',' | ForEach-Object { ($_.Trim() -replace '\s*\((?:public|private|domain)\)$', '') } | Where-Object { $_ })
+            $cleanNms = @($nmTxt -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
             $shortNms = if ($cleanNms.Count -gt 2) { ($cleanNms[0..1] -join ', ') + " и ещё $($cleanNms.Count - 2)" } else { ($cleanNms -join ', ') }
-            $TxtNlmStatus.Text = "Исключены: $shortNms"
-            $TxtNlmStatus.ToolTip = "Полный список исключённых VPN: $($cleanNms -join ', ')"
-            $TxtNlmStatus.Foreground = $bc.ConvertFromString($AccentLightHex)
-        } elseif ($nlmHasFilter) {
-            $TxtNlmStatus.Text = 'Активен фильтр NLM — нажми «Настроить», чтобы выбрать VPN по отдельности'
-            $TxtNlmStatus.ToolTip = $null
+            $TxtNlmStatus.Text = "Обход на: $shortNms (все VPN исключены)"
+            $TxtNlmStatus.ToolTip = "Интерфейсы обхода WinDivert: $($cleanNms -join ', ')"
             $TxtNlmStatus.Foreground = $bc.ConvertFromString($AccentLightHex)
         } else {
-            $TxtNlmStatus.Text = 'Авто-защита активна — обнаруженные VPN (WireGuard / Amnezia и др.) исключаются автоматически; ExitLag идёт через обход'
+            $TxtNlmStatus.Text = 'Активно: обход только на физ. картах (Ethernet / Wi-Fi / PPPoE), все VPN исключены'
             $TxtNlmStatus.ToolTip = $null
             $TxtNlmStatus.Foreground = $bc.ConvertFromString($AccentLightHex)
         }
     } else {
-        $TxtNlmStatus.Text = 'Исключает выбранные VPN-адаптеры (WireGuard / Amnezia), позволяя гнать ExitLag через обход'
+        $TxtNlmStatus.Text = 'Выключено — обход работает на всех сетевых интерфейсах Windows'
         $TxtNlmStatus.ToolTip = $null
         $TxtNlmStatus.Foreground = $bc.ConvertFromString('#9CA3AF')
     }
@@ -1173,17 +1302,19 @@ function Refresh-Dashboard {
     $bpAppliedNames = @()
     $anyQuicOff = $false
     $anyDohOn   = $false
+    $bpMissingNames = @()
     $bhCheck = Join-Path $Root 'utils\browser_helper.ps1'
     if (Test-Path -LiteralPath $bhCheck) {
         try {
-            $brAll = Get-Z2BrowserStates
-            $bpAppliedNames = @($brAll | Where-Object { $_.Applied } | ForEach-Object { $_.Name })
-            $anyQuicOff = (@($brAll | Where-Object { $_.QuicOff }).Count -gt 0)
-            $anyDohOn   = (@($brAll | Where-Object { $_.DohOn }).Count -gt 0)
+            $brAll = @(Get-Z2BrowserStates)
+            $brAuto = @($brAll | Where-Object { $_.Kind -ne 'manual' })
+            $bpAppliedNames = @($brAuto | Where-Object { $_.QuicOff } | ForEach-Object { $_.Name })
+            $bpMissingNames = @($brAuto | Where-Object { -not $_.QuicOff } | ForEach-Object { $_.Name })
+            $anyQuicOff = ($bpAppliedNames.Count -gt 0)
+            $anyDohOn   = (@($brAuto | Where-Object { $_.DohOn }).Count -gt 0)
         } catch {}
     }
     if ($null -ne $ChkBrowserQuic) { $ChkBrowserQuic.IsChecked = $anyQuicOff }
-    if ($null -ne $ChkBrowserDoh)  { $ChkBrowserDoh.IsChecked  = $anyDohOn }
     $bpApplied = ($bpAppliedNames.Count -gt 0)
 
     # Refresh AI bypass card
@@ -1221,42 +1352,35 @@ function Refresh-Dashboard {
                 $TxtAiStatusLine.Text = "Включён · $($aiSt.ActiveName) · $($aiSt.ServicesLabel) ($($aiSt.RuleCount) доменов)$warnDoh$warnVpn"
                 $TxtAiStatusLine.Foreground = if ($anyDohOn -or ($null -ne $vpnNowAi -and $vpnNowAi.Active)) { $bc.ConvertFromString('#D9B066') } else { $bc.ConvertFromString($AccentLightHex) }
                 if ($null -ne $BtnAiToggle) { $BtnAiToggle.Content = 'Выключить' }
-                if ($null -ne $ChkBrowserDoh) { $ChkBrowserDoh.IsEnabled = $false }
-                if ($null -ne $TxtBrowserDohDesc) {
-                    $TxtBrowserDohDesc.Text = '🔒 Заблокировано: несовместимо с активным «Обходом ИИ» (выключи «Обход ИИ», чтобы включить DoH).'
-                    $TxtBrowserDohDesc.Foreground = $bc.ConvertFromString('#D9B066')
-                }
             } elseif ($script:AiPausedByVpn) {
                 $vpnLblP = if ($null -ne $vpnNowAi -and $vpnNowAi.Active) { $vpnNowAi.Label } else { 'VPN' }
                 $TxtAiStatusLine.Text = "На паузе (активен $vpnLblP) · вернётся сам после отключения VPN"
                 $TxtAiStatusLine.Foreground = $bc.ConvertFromString('#D9B066')
                 if ($null -ne $BtnAiToggle) { $BtnAiToggle.Content = 'Выключить' }
-                if ($null -ne $ChkBrowserDoh) { $ChkBrowserDoh.IsEnabled = $false }
-                if ($null -ne $TxtBrowserDohDesc) {
-                    $TxtBrowserDohDesc.Text = '🔒 Заблокировано: «Обход ИИ» на паузе из-за VPN и вернётся сам (выключи «Обход ИИ», чтобы включить DoH).'
-                    $TxtBrowserDohDesc.Foreground = $bc.ConvertFromString('#D9B066')
-                }
             } else {
                 $TxtAiStatusLine.Text = if ($aiSt.ServicesLabel -and $aiSt.ServicesLabel -ne 'не выбрано') { "Выключен · выбрано: $($aiSt.ServicesLabel)" } else { 'Выключен' }
                 $TxtAiStatusLine.Foreground = $bc.ConvertFromString('#9CA3AF')
                 if ($null -ne $BtnAiToggle) { $BtnAiToggle.Content = 'Включить' }
-                if ($null -ne $ChkBrowserDoh -and -not $script:BgOpBusy -and ($null -eq $script:WatchedProc -or $script:WatchedProc.HasExited)) { $ChkBrowserDoh.IsEnabled = $true }
-                if ($null -ne $TxtBrowserDohDesc) {
-                    $TxtBrowserDohDesc.Text = 'Шифрует DNS-запросы браузера поверх HTTPS — помогает, если провайдер подменяет DNS.'
-                    $TxtBrowserDohDesc.Foreground = $bc.ConvertFromString('#9CA3AF')
-                }
             }
         }
     }
     if ($bpApplied) {
-        $brFlags = @(); if ($anyQuicOff) { $brFlags += 'QUIC выкл' }; if ($anyDohOn) { $brFlags += 'DoH вкл' }; $brFlagStr = if ($brFlags.Count -gt 0) { " ($($brFlags -join ', '))" } else { '' }; $TxtBrowserFixState.Text = "Применён для: $($bpAppliedNames -join ', ')$brFlagStr"
-        $TxtBrowserFixState.Foreground = $bc.ConvertFromString($AccentLightHex)
-        if ($null -ne $TxtBrowserFixBadge) { $TxtBrowserFixBadge.Text = "Применён ($($bpAppliedNames.Count))"; $TxtBrowserFixBadge.Foreground = $bc.ConvertFromString('#7BC4A4') }
-        if ($null -ne $BdBrowserFixBadge)  { $BdBrowserFixBadge.Background = $bc.ConvertFromString('#1C3128'); $BdBrowserFixBadge.BorderBrush = $bc.ConvertFromString('#2B4E40') }
+        if ($bpMissingNames.Count -gt 0) {
+            $totBr = $bpAppliedNames.Count + $bpMissingNames.Count
+            $TxtBrowserFixState.Text = "QUIC выкл: $($bpAppliedNames -join ', ')  ·  Без фикса: $($bpMissingNames -join ', ')"
+            $TxtBrowserFixState.Foreground = $bc.ConvertFromString('#D9B066')
+            if ($null -ne $TxtBrowserFixBadge) { $TxtBrowserFixBadge.Text = "$($bpAppliedNames.Count) из $totBr"; $TxtBrowserFixBadge.Foreground = $bc.ConvertFromString('#D9B066') }
+            if ($null -ne $BdBrowserFixBadge)  { $BdBrowserFixBadge.Background = $bc.ConvertFromString('#2B2518'); $BdBrowserFixBadge.BorderBrush = $bc.ConvertFromString('#4E4226') }
+        } else {
+            $TxtBrowserFixState.Text = "QUIC выкл для: $($bpAppliedNames -join ', ')"
+            $TxtBrowserFixState.Foreground = $bc.ConvertFromString($AccentLightHex)
+            if ($null -ne $TxtBrowserFixBadge) { $TxtBrowserFixBadge.Text = "Применён ($($bpAppliedNames.Count))"; $TxtBrowserFixBadge.Foreground = $bc.ConvertFromString('#7BC4A4') }
+            if ($null -ne $BdBrowserFixBadge)  { $BdBrowserFixBadge.Background = $bc.ConvertFromString('#1C3128'); $BdBrowserFixBadge.BorderBrush = $bc.ConvertFromString('#2B4E40') }
+        }
     } else {
-        $TxtBrowserFixState.Text = 'Включай только если тормозит YouTube или не грузятся смайлы 7TV (Chrome, Edge, Firefox, Яндекс, Brave, Vivaldi)'
+        $TxtBrowserFixState.Text = 'Включай, если тормозит YouTube или не грузятся смайлы 7TV (переводит браузеры на стабильный TCP 443)'
         $TxtBrowserFixState.Foreground = $bc.ConvertFromString('#9CA3AF')
-        if ($null -ne $TxtBrowserFixBadge) { $TxtBrowserFixBadge.Text = 'По умолчанию'; $TxtBrowserFixBadge.Foreground = $bc.ConvertFromString('#9CA3AF') }
+        if ($null -ne $TxtBrowserFixBadge) { $TxtBrowserFixBadge.Text = 'Выключен'; $TxtBrowserFixBadge.Foreground = $bc.ConvertFromString('#9CA3AF') }
         if ($null -ne $BdBrowserFixBadge)  { $BdBrowserFixBadge.Background = $bc.ConvertFromString('#23262E'); $BdBrowserFixBadge.BorderBrush = $bc.ConvertFromString('#343844') }
     }
     $auTask = Get-Z2AutoUpdateTask
@@ -1436,10 +1560,29 @@ $script:CatTimer.Add_Tick({
                 $errMsg = if ($errLine) { "$lbl — $errLine" } else { "$lbl завершилось с кодом $ec" }
                 Set-Status $errMsg '#D97777'
                 Show-Toast $errMsg $true
+                if ((Get-Command Send-Z2TelemetryEvent -ErrorAction SilentlyContinue) -and (Test-Z2TelemetryEnabled $Root)) {
+                    try {
+                        $snapE = if (Get-Command Get-Z2TelemetrySnapshot -ErrorAction SilentlyContinue) { Get-Z2TelemetrySnapshot $Root } else { '' }
+                        $logTailE = if ($allLogLines -and $allLogLines.Count -gt 0) { ($allLogLines | Select-Object -Last 15) -join "`n" } else { '' }
+                        $errDet = "$errMsg`n$snapE"
+                        if ($logTailE) { $errDet += "`n--- Last log ---`n$logTailE" }
+                        $errCode = if ($taskKind) { "${taskKind}:$ec" } else { "$ec" }
+                        [void](Send-Z2TelemetryEvent -RootPath $Root -Event 'error' -Strategy $script:ActiveStratName -Code $errCode -Detail $errDet)
+                    } catch {}
+                }
             } elseif ($taskKind -eq 'autosetup' -and -not $script:ZapretIsRunning) {
                 $errMsg = if ($errLine) { "Автонастройка: $errLine" } else { "Автонастройка не смогла запустить службу zapret (проверь диагностику)." }
                 Set-Status $errMsg '#D97777'
                 Show-Toast $errMsg $true
+                if ((Get-Command Send-Z2TelemetryEvent -ErrorAction SilentlyContinue) -and (Test-Z2TelemetryEnabled $Root)) {
+                    try {
+                        $snapE = if (Get-Command Get-Z2TelemetrySnapshot -ErrorAction SilentlyContinue) { Get-Z2TelemetrySnapshot $Root } else { '' }
+                        $logTailE = if ($allLogLines -and $allLogLines.Count -gt 0) { ($allLogLines | Select-Object -Last 15) -join "`n" } else { '' }
+                        $errDet = "$errMsg`n$snapE"
+                        if ($logTailE) { $errDet += "`n--- Last log ---`n$logTailE" }
+                        [void](Send-Z2TelemetryEvent -RootPath $Root -Event 'error' -Strategy $script:ActiveStratName -Code 'autosetup:no_svc' -Detail $errDet)
+                    } catch {}
+                }
             } else {
                 $okMsg = if ($taskKind -eq 'autosetup') { "Автонастройка завершена — стратегия $($script:ActiveStratName) активна!" } elseif ($summaryLine) { "$lbl — $summaryLine" } else { "$lbl — успешно завершено!" }
                 Set-Status $okMsg $AccentLightHex
@@ -1448,7 +1591,7 @@ $script:CatTimer.Add_Tick({
                 if (($taskKind -eq 'autosetup' -or $taskKind -eq 'hybrid') -and $script:ZapretIsRunning) {
                     $tgSt = if ($TxtTgStatusLine.Text -like 'Активен*') { 'активен' } else { 'готов' }
                     $pct = 100; $okN = 0; $totN = 0
-                    $resFile = Join-Path $Root 'utils\last_autosetup.json'
+                    $resFile = if ($taskKind -eq 'hybrid') { Join-Path $Root 'utils\last_hybrid.json' } else { Join-Path $Root 'utils\last_autosetup.json' }
                     if (Test-Path -LiteralPath $resFile) {
                         try {
                             $rj = Get-Content -LiteralPath $resFile -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -1480,23 +1623,24 @@ $script:CatTimer.Add_Tick({
                             $TxtAutoDoneTitle.Text = "✓  Котек всё настроил — можно пользоваться!"
                             $TxtAutoDoneTitle.Foreground = $bcDone.ConvertFromString($AccentLightHex)
                         }
-                        $scoreSuffix = if ($taskKind -eq 'autosetup' -and $totN -gt 0) { " ($okN/$totN · $pct%)" } else { "" }
+                        $scoreSuffix = if ($totN -gt 0) { " ($okN/$totN · $pct%)" } else { "" }
                         $TxtAutoDoneSummary.Text = "Активная стратегия: $($script:ActiveStratName)$scoreSuffix  ·  Обход DPI: работает  ·  Telegram Proxy: $tgSt"
                         if ($null -ne $TxtAutoDoneHints) {
-                            $TxtAutoDoneHints.Text = "• Вкладка «Стратегии» — ручной выбор, быстрая проверка и синтез гибрида`n• Вкладка «Настройки» — авто-хостлист, WARP, UDP-фейк, обновления и удаление`n• Обход работает в фоне сам — это окно можно спокойно закрыть"
+                            $TxtAutoDoneHints.Text = "Обход работает в фоне сам — это окно можно свернуть или закрыть в любой момент."
                         }
                         if ($taskKind -eq 'hybrid') {
                             $BtnAutoDoneDeep.Visibility = 'Collapsed'
-                            $BtnAutoDoneClose.Style = $primStyle
                         } else {
                             $BtnAutoDoneDeep.Visibility = 'Visible'
                             $BtnAutoDoneDeep.Style  = $primStyle
-                            $BtnAutoDoneClose.Style = $secStyle
                         }
                     }
                     if ((Get-Command Send-Z2TelemetryEvent -ErrorAction SilentlyContinue) -and (Test-Z2TelemetryEnabled $Root)) {
                         $tScore = if ($totN -gt 0) { "$okN/$totN ($pct%)" } else { 'OK' }
-                        try { [void](Send-Z2TelemetryEvent -RootPath $Root -Event $taskKind -Strategy $script:ActiveStratName -Score $tScore -Code '0') } catch {}
+                        try {
+                            $okSnap = if (Get-Command Get-Z2TelemetrySnapshot -ErrorAction SilentlyContinue) { Get-Z2TelemetrySnapshot $Root } else { '' }
+                            [void](Send-Z2TelemetryEvent -RootPath $Root -Event $taskKind -Strategy $script:ActiveStratName -Score $tScore -Code '0' -Detail $okSnap)
+                        } catch {}
                     }
                     Sync-AutoDoneUpdBtn
                     $AutoDoneCard.Visibility = 'Visible'
@@ -1533,7 +1677,7 @@ function Run-ConsoleTool([string]$ScriptRel, [string]$ExtraArgs = '', [bool]$Kee
     } elseif ($ScriptRel -match 'auto_setup') {
         $script:ActiveTaskKind = 'autosetup'
     } elseif ($ScriptRel -match 'deep_optimize') {
-        $script:ActiveTaskKind = 'deep'
+        $script:ActiveTaskKind = 'hybrid'
     } elseif ($ScriptRel -match 'diag_report') {
         $script:ActiveTaskKind = 'diag'
     } elseif ($ScriptRel -match 'probe_one') {
@@ -1565,7 +1709,7 @@ function Run-ConsoleTool([string]$ScriptRel, [string]$ExtraArgs = '', [bool]$Kee
     if ($null -ne $TxtTaskLogBox) { $TxtTaskLogBox.Text = "Запуск задачи..." }
     Set-KotekEmotion 'work'
     $AutoDoneCard.Visibility = 'Collapsed'
-    if ($null -ne $BtnCancelHybrid) { $BtnCancelHybrid.Visibility = 'Collapsed' }
+    if ($null -ne $BtnCancelHybrid) { $BtnCancelHybrid.Visibility = if ($script:ActiveTaskKind -eq 'hybrid') { 'Visible' } else { 'Collapsed' } }
     $ActiveTaskCard.Visibility = 'Visible'
     if ($ScriptRel -match 'auto_setup|deep_optimize|probe_one|fake_selector|apply_strategy') {
         $bcBusy = $script:BrushConv
@@ -2030,12 +2174,7 @@ $ChkNlmVpn.Add_Click({
         & $nlmScript -Action auto -Root $Root | Out-Null
         if ($LASTEXITCODE -ne 0) {
             $ChkNlmVpn.IsChecked = $false
-            Show-Toast 'Не удалось настроить NLM-фильтр.' $true
-            return
-        }
-        if (-not (Test-Path -LiteralPath (Join-Path $Root 'utils\nlm_filter.enabled')) -and -not (Test-Path -LiteralPath (Join-Path $Root 'utils\nlm_auto.enabled'))) {
-            $ChkNlmVpn.IsChecked = $false
-            Show-Toast 'Не удалось включить авто-исключение VPN (NLM).' $true
+            Show-Toast 'Не найдено физических адаптеров для фильтра WinDivert.' $true
             return
         }
     } else {
@@ -2049,7 +2188,7 @@ $BtnNlmConfig.Add_Click({
         if ($saved) {
             Refresh-Dashboard
             Apply-SettingsNow $false
-            Show-Toast 'Список исключённых VPN (NLM) обновлён и применён' $false
+            Show-Toast 'Список интерфейсов обхода (WinDivert) обновлён и применён' $false
         }
     }
 })
@@ -2059,85 +2198,21 @@ $BtnBrowserFix.Add_Click({
         Show-Toast 'Настройки браузеров обновлены — перезапусти браузер.' $false
     }
 })
-$BtnBrowserRevert.Add_Click({
-    & (Join-Path $Root 'utils\browser_helper.ps1') -Action revert -Root $Root | Out-Null
-    Refresh-Dashboard
-    Show-Toast 'Политики QUIC/DoH браузера возвращены к стандартным.' $false
-})
-
-if ($null -ne $BtnBrowserExpand -and $null -ne $PnlBrowserExpand) {
-    $BtnBrowserExpand.Add_Click({
-        if ($PnlBrowserExpand.Visibility -eq 'Visible') {
-            $PnlBrowserExpand.Visibility = 'Collapsed'
-            $BtnBrowserExpand.Content = 'Параметры ▾'
-        } else {
-            $PnlBrowserExpand.Visibility = 'Visible'
-            $BtnBrowserExpand.Content = 'Параметры ▴'
-        }
-    })
-}
-
 if ($null -ne $ChkBrowserQuic) {
     $ChkBrowserQuic.Add_Click({
         if ($null -ne $script:WatchedProc -and -not $script:WatchedProc.HasExited) { $ChkBrowserQuic.IsChecked = -not [bool]$ChkBrowserQuic.IsChecked; Set-Status 'Дождись завершения текущей задачи.' '#D9B066'; return }
         $bhP = Join-Path $Root 'utils\browser_helper.ps1'
         if (Test-Path -LiteralPath $bhP) {
             if ($ChkBrowserQuic.IsChecked) {
+                [void](Disable-BrowserFix $true @() $Root $false $true)
                 [void](Enable-BrowserFix @() $Root $true $false)
                 Show-Toast 'QUIC (HTTP/3) отключён в браузерах — перезапусти браузер.' $false
             } else {
-                [void](Disable-BrowserFix $true @() $Root $true $false)
-                Show-Toast 'QUIC возвращён к стандартному — перезапусти браузер.' $false
+                [void](Disable-BrowserFix $true @() $Root $true $true)
+                Show-Toast 'Политики браузеров возвращены к стандартным — перезапусти браузер.' $false
             }
             Refresh-Dashboard
         }
-    })
-}
-
-if ($null -ne $ChkBrowserDoh) {
-    $ChkBrowserDoh.Add_Click({
-        if ($null -ne $script:WatchedProc -and -not $script:WatchedProc.HasExited) { $ChkBrowserDoh.IsChecked = -not [bool]$ChkBrowserDoh.IsChecked; Set-Status 'Дождись завершения текущей задачи.' '#D9B066'; return }
-        $bhP = Join-Path $Root 'utils\browser_helper.ps1'
-        $aiP = Join-Path $Root 'utils\ai_bypass_helper.ps1'
-        if (-not (Test-Path -LiteralPath $bhP)) { return }
-        if ($ChkBrowserDoh.IsChecked) {
-            $aiActiveNow = $false
-            if (Test-Path -LiteralPath $aiP) {
-                $aiActiveNow = (Get-Z2AiBypassState $Root).Active
-            }
-            if ($aiActiveNow) {
-                $qMsg = "Сейчас активен «Обход ИИ» через системный DNS (NRPT).`r`nВключение DoH в браузере несовместимо с ним — браузер начнёт идти мимо NRPT и выбранные ИИ-сервисы перестанут открываться.`r`n`r`nВыключить «Обход ИИ» и включить DoH в браузере?"
-                $ans = Show-Z2MessageDialog -Owner $win -Title 'Конфликт: DoH и обход ИИ' -Message $qMsg -Kind 'Warning' -Buttons 'YesNo' -AccentHex $AccentHex
-                if ($ans -ne 'Yes') {
-                    $ChkBrowserDoh.IsChecked = $false
-                    return
-                }
-                Set-Status 'Отключаю обход ИИ и включаю DoH...' '#D9B066'
-                Invoke-Z2BgUiWork {
-                    param($RootDir)
-                    try {
-                        . (Join-Path $RootDir 'utils\ai_bypass_helper.ps1') -Root $RootDir
-                        . (Join-Path $RootDir 'utils\browser_helper.ps1') -Root $RootDir
-                        [void](Disable-Z2AiBypass $RootDir)
-                        [void](Enable-BrowserFix @() $RootDir $false $true)
-                        return $true
-                    } catch { return $false }
-                } @{ RootDir = $Root } {
-                    param($res, $err)
-                    Refresh-Dashboard
-                    $ok = ($res -is [System.Collections.IList] -and $res.Count -gt 0 -and [bool]$res[0]) -or ($res -eq $true)
-                    if ($ok) { Show-Toast 'Обход ИИ отключён, DoH включён — перезапусти браузер.' $false }
-                    else { Show-Toast 'Не удалось переключить DoH и обход ИИ.' $true }
-                }
-                return
-            }
-            [void](Enable-BrowserFix @() $Root $false $true)
-            Show-Toast 'DoH включён в браузерах — перезапусти браузер.' $false
-        } else {
-            [void](Disable-BrowserFix $true @() $Root $false $true)
-            Show-Toast 'DoH в браузерах отключён — перезапусти браузер.' $false
-        }
-        Refresh-Dashboard
     })
 }
 
@@ -2300,7 +2375,6 @@ if ($null -ne $BtnAiToggle) {
             }
             if ($dohConflict) {
                 [void](Disable-BrowserFix $true @() $Root $false $true)
-                if ($null -ne $ChkBrowserDoh) { $ChkBrowserDoh.IsChecked = $false }
                 Show-Toast 'DoH в браузерах автоматически отключён (несовместим с «Обходом ИИ») — перезапусти браузер.' $false
             }
             $selMode = 'auto'
@@ -2388,13 +2462,22 @@ $CmbAutoUpdMode.Add_SelectionChanged({
 })
 
 
-# One-time silent VPN (NLM) auto-detection on first GUI launch so toggle is ON out of the box
-$nlmInitMarker = Join-Path $Root 'utils\nlm_filter.init'
-$nlmEnFileInit = Join-Path $Root 'utils\nlm_filter.enabled'
-if (-not (Test-Path -LiteralPath $nlmInitMarker) -and -not (Test-Path -LiteralPath $nlmEnFileInit)) {
-    try { & (Join-Path $Root 'utils\nlm_helper.ps1') -Action auto -Root $Root | Out-Null } catch {}
-    try { [System.IO.File]::WriteAllText($nlmInitMarker, '1', (New-Object System.Text.UTF8Encoding($false))) } catch {}
-}
+# Auto-sync WinDivert hardware interface filter on GUI launch (catches newly plugged USB modems / adapters)
+try {
+    $vpnIfSyncFlag = Join-Path $Root 'utils\vpn_ifidx.enabled'
+    $nlmHlpSync = Join-Path $Root 'utils\nlm_helper.ps1'
+    if ((Test-Path -LiteralPath $vpnIfSyncFlag) -and (Test-Path -LiteralPath $nlmHlpSync)) {
+        $global:LASTEXITCODE = 0
+        & $nlmHlpSync -Action sync -Root $Root | Out-Null
+        if ($LASTEXITCODE -eq 10) {
+            $sZSync = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+            if ($null -ne $sZSync -and $sZSync.Status -eq 'Running') {
+                Restart-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
+            }
+            if ($null -ne $sZSync) { try { $sZSync.Dispose() } catch {} }
+        }
+    }
+} catch {}
 Load-Strategies 'core'
 Refresh-Dashboard
 # Unified ContentRendered handler is registered below (merges AutoStart relocation + service migration)
@@ -2659,7 +2742,12 @@ $script:WpfApp.Add_DispatcherUnhandledException({
         $crashPath = Join-Path $env:TEMP 'z2_gui_crash.log'
         [System.IO.File]::AppendAllText($crashPath, "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') $($ev.Exception.ToString())`r`n`r`n", [System.Text.Encoding]::UTF8)
         if ((Get-Command Send-Z2TelemetryEvent -ErrorAction SilentlyContinue) -and (Test-Z2TelemetryEnabled $Root)) {
-            try { [void](Send-Z2TelemetryEvent -RootPath $Root -Event 'crash' -Code $ev.Exception.GetType().Name -Detail $ev.Exception.Message) } catch {}
+            try {
+                $crSnap = if (Get-Command Get-Z2TelemetrySnapshot -ErrorAction SilentlyContinue) { Get-Z2TelemetrySnapshot $Root } else { '' }
+                $stTrace = if ($ev.Exception.StackTrace) { (($ev.Exception.StackTrace -split "`r?`n") | Select-Object -First 8) -join "`n" } else { '' }
+                $crDet = "$($ev.Exception.Message)`n$stTrace`n$crSnap"
+                [void](Send-Z2TelemetryEvent -RootPath $Root -Event 'crash' -Strategy $script:ActiveStratName -Code $ev.Exception.GetType().Name -Detail $crDet)
+            } catch {}
         }
         [void](Show-Z2MessageDialog -Owner $win -Title 'Zapret2 Kotek — Ошибка интерфейса' -Message "Произошла непредвиденная ошибка:`n`n$($ev.Exception.Message)`n`nПодробности записаны в $crashPath" -Kind 'Error' -Buttons 'OK' -AccentHex $AccentHex)
     } catch {}
@@ -2773,6 +2861,7 @@ $win.Add_ContentRendered({
                                 Start-Sleep -Milliseconds 250
 
                                 if (Test-Path -LiteralPath $OldRoot) {
+                                    $oldHadNlmAuto = Test-Path -LiteralPath (Join-Path $OldRoot 'utils\nlm_auto.enabled')
                                     $migFiles = @(
                                         'lists\list-general-user.txt', 'lists\list-exclude-user.txt', 'lists\ipset-exclude-user.txt',
                                         'lists\list-auto.txt', 'lists\ai-custom-domains.txt', 'utils\tgws_proxy.conf', 'utils\strategy_scores.json',
@@ -2783,6 +2872,7 @@ $win.Add_ContentRendered({
                                         'strategies\custom_auto_synthesized.bat'
                                     )
                                     foreach ($mf in $migFiles) {
+                                        if ($oldHadNlmAuto -and ($mf -eq 'utils\nlm_filter.enabled' -or $mf -eq 'utils\nlm_filter.names')) { continue }
                                         $sFp = Join-Path $OldRoot $mf
                                         if (Test-Path -LiteralPath $sFp) {
                                             $dFp = Join-Path $NewRoot $mf
@@ -2791,7 +2881,17 @@ $win.Add_ContentRendered({
                                             Copy-Item -LiteralPath $sFp -Destination $dFp -Force -ErrorAction SilentlyContinue
                                         }
                                     }
-                                    foreach ($df in @('utils\autohostlist.enabled', 'utils\warp_unblock.enabled', 'utils\kernel_filter.enabled', 'utils\nlm_auto.enabled')) {
+                                    $migSynthNew = Join-Path $NewRoot 'strategies\custom_auto_synthesized.bat'
+                                    if (Test-Path -LiteralPath $migSynthNew) {
+                                        try {
+                                            $sRawMig = [System.IO.File]::ReadAllText($migSynthNew, [System.Text.Encoding]::UTF8)
+                                            if ($sRawMig -like '*circular:fails=1:time=60:reset:retrans=2*') {
+                                                $sRawMig = $sRawMig.Replace('circular:fails=1:time=60:reset:retrans=2', 'circular:fails=3:time=60:reset:retrans=4')
+                                                [System.IO.File]::WriteAllText($migSynthNew, $sRawMig, (New-Object System.Text.UTF8Encoding($false)))
+                                            }
+                                        } catch {}
+                                    }
+                                    foreach ($df in @('utils\autohostlist.enabled', 'utils\warp_unblock.enabled', 'utils\kernel_filter.enabled')) {
                                         $sDf = Join-Path $OldRoot $df
                                         $dDf = Join-Path $NewRoot $df
                                         if (Test-Path -LiteralPath $sDf) {
@@ -2819,7 +2919,6 @@ $win.Add_ContentRendered({
                                     $tgH = Join-Path $NewRoot 'utils\tgws_helper.ps1'
                                     if (Test-Path -LiteralPath $tgH) { $env:Z2_ROOT = $NewRoot; & $tgH ensure-service-silent | Out-Null }
                                 }
-                                Set-Z2DesktopAndFolderIcons $NewRoot
                                 Register-Z2UninstallEntry $NewRoot
                                 if (Test-Path -LiteralPath (Join-Path $NewRoot 'utils\tray_mode.enabled')) { [void](Register-Z2TrayStartupTask $NewRoot) }
                                 if ($null -ne (Get-Z2AutoUpdateTask)) {
@@ -2849,10 +2948,17 @@ $win.Add_ContentRendered({
         }
     } catch {}
     try {
+        $fIcoChk = Join-Path $Root 'utils\kotek_folder.ico'
+        $fIniChk = Join-Path ($Root.TrimEnd('\')) 'desktop.ini'
+        if ((-not (Test-Path -LiteralPath $fIcoChk)) -or (-not (Test-Path -LiteralPath $fIniChk))) {
+            if (Get-Command Set-Z2DesktopAndFolderIcons -ErrorAction SilentlyContinue) {
+                Set-Z2DesktopAndFolderIcons $Root -FolderOnly
+            }
+        }
+    } catch {}
+    try {
         $fPromptStart = Join-Path $Root 'utils\telemetry.prompted'
-        $fTelStart    = Join-Path $Root 'utils\telemetry.enabled'
-        $hasSetup     = $script:ZapretIsRunning -or (Test-Path -LiteralPath (Join-Path $Root 'bin\service.conf'))
-        if ($hasSetup -and (-not (Test-Path -LiteralPath $fPromptStart)) -and (-not (Test-Path -LiteralPath $fTelStart))) {
+        if (-not (Test-Path -LiteralPath $fPromptStart)) {
             Invoke-Z2TelemetryPromptOnce
         }
     } catch {}

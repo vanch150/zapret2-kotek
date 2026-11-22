@@ -6,7 +6,7 @@
 
 # --- YouTube / Google ---
 YT|CORE|https://www.youtube.com
-YT|CORE|https://i.ytimg.com/favicon.ico
+YT|CORE|https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg
 YT|CORE|https://yt3.ggpht.com
 YT|CORE|https://jnn-pa.googleapis.com
 YT|CORE|https://redirector.googlevideo.com
@@ -28,7 +28,7 @@ TG|EXT|https://t.me
 # --- Web / Cloudflare / Streaming ---
 WEB|CORE|https://cloudflare-dns.com
 WEB|CORE|https://one.one.one.one
-WEB|CORE|https://speed.cloudflare.com/__down?bytes=65536
+WEB|CORE|https://speed.cloudflare.com/__down?bytes=262144
 WEB|CORE|https://7tv.io
 WEB|CORE|https://cdn.7tv.app
 WEB|CORE|https://betterttv.net

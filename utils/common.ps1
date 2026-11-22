@@ -12,7 +12,7 @@ function Get-Z2Version([string]$Root) {
         $v = (Get-Content -LiteralPath $vf -TotalCount 1 -ErrorAction SilentlyContinue)
         if ($v) { return $v.Trim() }
     }
-    return '1.0.9'
+    return '1.1.1'
 }
 
 function Get-Z2Repo([string]$Root) {
@@ -116,10 +116,215 @@ function Get-Z2AutoUpdateTask {
     } catch { return $null }
 }
 
-function Set-Z2DesktopAndFolderIcons([string]$Root) {
+
+function Build-Z2PerchFolderIcon {
+    param(
+        [string]$PerchPngPath,
+        [string]$OutIcoPath
+    )
+    try {
+        Add-Type -AssemblyName System.Drawing -ErrorAction Stop
+        if (-not ('Z2ShellFolderIcon' -as [type])) {
+            $csCode = @'
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+
+public static class Z2ShellFolderIcon {
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct SHFILEINFO {
+        public IntPtr hIcon;
+        public int iIcon;
+        public uint dwAttributes;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string szDisplayName;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 80)]
+        public string szTypeName;
+    }
+
+    [ComImport]
+    [Guid("46EB5926-582E-4017-9FDF-E8998DAA0950")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IImageList {
+        int Add(IntPtr hbmImage, IntPtr hbmMask, ref int pi);
+        int ReplaceIcon(int i, IntPtr hicon, ref int pi);
+        int SetOverlayImage(int iImage, int iOverlay);
+        int Replace(int i, IntPtr hbmImage, IntPtr hbmMask);
+        int AddMasked(IntPtr hbmImage, int crMask, ref int pi);
+        int Draw(IntPtr pimldp);
+        int Remove(int i);
+        int GetIcon(int i, int flags, ref IntPtr picon);
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern IntPtr SHGetFileInfo(string pszPath, uint dwFileAttributes, ref SHFILEINFO psfi, uint cbFileInfo, uint uFlags);
+
+    [DllImport("shell32.dll", EntryPoint = "#727")]
+    private static extern int SHGetImageList(int iImageList, ref Guid riid, out IImageList ppv);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool DestroyIcon(IntPtr hIcon);
+
+    public static Bitmap GetSystemFolderBitmap(string sampleFolderPath) {
+        SHFILEINFO shfi = new SHFILEINFO();
+        const uint SHGFI_SYSICONINDEX = 0x000004000;
+        const uint SHGFI_USEFILEATTRIBUTES = 0x000000010;
+        const uint FILE_ATTRIBUTE_DIRECTORY = 0x00000010;
+        IntPtr res = SHGetFileInfo(sampleFolderPath, FILE_ATTRIBUTE_DIRECTORY, ref shfi, (uint)Marshal.SizeOf(shfi), SHGFI_SYSICONINDEX | SHGFI_USEFILEATTRIBUTES);
+        if (res == IntPtr.Zero) return null;
+        Guid iid = new Guid("46EB5926-582E-4017-9FDF-E8998DAA0950");
+        IImageList iml;
+        // 4 = SHIL_JUMBO (256x256), fallback 2 = SHIL_EXTRALARGE (48x48)
+        int hr = SHGetImageList(4, ref iid, out iml);
+        if (hr != 0 || iml == null) {
+            hr = SHGetImageList(2, ref iid, out iml);
+            if (hr != 0 || iml == null) return null;
+        }
+        IntPtr hIcon = IntPtr.Zero;
+        try {
+            hr = iml.GetIcon(shfi.iIcon, 1, ref hIcon);
+            if (hr != 0 || hIcon == IntPtr.Zero) return null;
+            using (Icon ic = Icon.FromHandle(hIcon)) {
+                return ic.ToBitmap();
+            }
+        } finally {
+            if (hIcon != IntPtr.Zero) DestroyIcon(hIcon);
+        }
+    }
+}
+'@
+            Add-Type -TypeDefinition $csCode -ReferencedAssemblies System.Drawing -ErrorAction Stop
+        }
+
+        $folderBmp = [Z2ShellFolderIcon]::GetSystemFolderBitmap($env:SystemRoot)
+        if ($null -eq $folderBmp) { return $false }
+
+        $perchBytes = [System.IO.File]::ReadAllBytes($PerchPngPath)
+        $perchMs = New-Object System.IO.MemoryStream(,$perchBytes)
+        $perchBmp = New-Object System.Drawing.Bitmap($perchMs)
+
+        try {
+            $fw = $folderBmp.Width; $fh = $folderBmp.Height
+            # Scan folder bounding box & right-half top edge (past the top-left tab)
+            $minX = $fw; $maxX = 0; $minY = $fh; $maxY = 0
+            for ($y = 0; $y -lt $fh; $y++) {
+                for ($x = 0; $x -lt $fw; $x++) {
+                    if ($folderBmp.GetPixel($x, $y).A -gt 40) {
+                        if ($x -lt $minX) { $minX = $x }
+                        if ($x -gt $maxX) { $maxX = $x }
+                        if ($y -lt $minY) { $minY = $y }
+                        if ($y -gt $maxY) { $maxY = $y }
+                    }
+                }
+            }
+            if ($maxX -le $minX -or $maxY -le $minY) { return $false }
+
+            $scanX0 = $minX + [int](($maxX - $minX) * 0.45)
+            $scanX1 = $minX + [int](($maxX - $minX) * 0.85)
+            $topEdgeY = $minY
+            $foundEdge = $false
+            for ($y = $minY; $y -le $maxY -and -not $foundEdge; $y++) {
+                for ($x = $scanX0; $x -le $scanX1; $x++) {
+                    if ($folderBmp.GetPixel($x, $y).A -gt 40) {
+                        $topEdgeY = $y
+                        $foundEdge = $true
+                        break
+                    }
+                }
+            }
+
+            $canvasSize = 256
+            $comp256 = New-Object System.Drawing.Bitmap($canvasSize, $canvasSize, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            $g = [System.Drawing.Graphics]::FromImage($comp256)
+            $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+            $g.Clear([System.Drawing.Color]::Transparent)
+
+            # Scale native folder to fit lower 80% of 256x256 so Kotek has room on top
+            $boxW = $maxX - $minX + 1
+            $boxH = $maxY - $minY + 1
+            $scale = [Math]::Min((232.0 / $boxW), (186.0 / $boxH))
+            $drawFW = [int][Math]::Round($boxW * $scale)
+            $drawFH = [int][Math]::Round($boxH * $scale)
+            $drawFX = [int][Math]::Round(($canvasSize - $drawFW) / 2.0)
+            $drawFY = $canvasSize - 8 - $drawFH
+
+            $srcRect = New-Object System.Drawing.Rectangle($minX, $minY, $boxW, $boxH)
+            $dstRect = New-Object System.Drawing.Rectangle($drawFX, $drawFY, $drawFW, $drawFH)
+            $g.DrawImage($folderBmp, $dstRect, $srcRect, [System.Drawing.GraphicsUnit]::Pixel)
+
+            # Compute exact mapped topEdgeY and place Kotek perched right on it (bellyRatio = 0.6154)
+            $mappedEdgeY = $drawFY + (($topEdgeY - $minY) * $scale)
+            $catW = [int][Math]::Round($drawFW * 0.72)
+            $catH = [int][Math]::Round($catW * ($perchBmp.Height / [double]$perchBmp.Width))
+            $catX = $drawFX + [int][Math]::Round($drawFW * 0.24)
+            $catY = [int][Math]::Round($mappedEdgeY - (0.6154 * $catH))
+            if ($catY -lt 2) { $catY = 2 }
+            $g.DrawImage($perchBmp, (New-Object System.Drawing.Rectangle($catX, $catY, $catW, $catH)))
+            $g.Dispose()
+
+            # Build multi-size PNG-compressed ICO (256/64/48/32 = perched Kotek, 16 = crisp native folder)
+            $sizes = @(256, 64, 48, 32, 16)
+            $pngBlobs = New-Object System.Collections.Generic.List[byte[]]
+            foreach ($sz in $sizes) {
+                $layer = New-Object System.Drawing.Bitmap($sz, $sz, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+                $lg = [System.Drawing.Graphics]::FromImage($layer)
+                $lg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+                $lg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+                $lg.Clear([System.Drawing.Color]::Transparent)
+                if ($sz -eq 16) {
+                    $lg.DrawImage($folderBmp, (New-Object System.Drawing.Rectangle(0, 0, 16, 16)))
+                } else {
+                    $lg.DrawImage($comp256, (New-Object System.Drawing.Rectangle(0, 0, $sz, $sz)))
+                }
+                $lg.Dispose()
+                $ms = New-Object System.IO.MemoryStream
+                $layer.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+                $pngBlobs.Add($ms.ToArray())
+                $ms.Dispose()
+                $layer.Dispose()
+            }
+            $comp256.Dispose()
+
+            # Write ICO binary
+            $icoMs = New-Object System.IO.MemoryStream
+            $bw = New-Object System.IO.BinaryWriter($icoMs)
+            $bw.Write([UInt16]0) # Reserved
+            $bw.Write([UInt16]1) # Type = ICO
+            $bw.Write([UInt16]$sizes.Count)
+            $offset = 6 + (16 * $sizes.Count)
+            for ($i = 0; $i -lt $sizes.Count; $i++) {
+                $dimByte = if ($sizes[$i] -ge 256) { [byte]0 } else { [byte]$sizes[$i] }
+                $bw.Write($dimByte)
+                $bw.Write($dimByte)
+                $bw.Write([byte]0)
+                $bw.Write([byte]0)
+                $bw.Write([UInt16]1)
+                $bw.Write([UInt16]32)
+                $bw.Write([UInt32]$pngBlobs[$i].Length)
+                $bw.Write([UInt32]$offset)
+                $offset += $pngBlobs[$i].Length
+            }
+            foreach ($blob in $pngBlobs) { $bw.Write($blob) }
+            $bw.Flush()
+            [System.IO.File]::WriteAllBytes($OutIcoPath, $icoMs.ToArray())
+            $bw.Dispose()
+            $icoMs.Dispose()
+            return $true
+        } finally {
+            $perchBmp.Dispose()
+            $perchMs.Dispose()
+            $folderBmp.Dispose()
+        }
+    } catch {
+        return $false
+    }
+}
+
+function Set-Z2DesktopAndFolderIcons([string]$Root, [switch]$FolderOnly) {
     $icoPath = Join-Path $Root 'utils\kotek.ico'
-    if (-not (Test-Path -LiteralPath $icoPath)) { return }
-    # 1. Create Desktop & Start Menu shortcuts "Zapret2 Kotek.lnk" pointing to 2_KOTEK.bat
+    if (-not $FolderOnly -and (Test-Path -LiteralPath $icoPath)) {
+    # 1. Create Desktop & Start Menu shortcuts "Zapret2 Kotek.lnk" pointing to !_START_KOTEK.bat
     try {
         $targetBat = Join-Path $Root '!_START_KOTEK.bat'
         if (-not (Test-Path -LiteralPath $targetBat)) { $targetBat = Join-Path $Root 'utils\service.bat' }
@@ -137,24 +342,34 @@ function Set-Z2DesktopAndFolderIcons([string]$Root) {
             }
         }
     } catch {}
-    # 2. Apply kotek.ico to the Zapret2 folder via desktop.ini
+    }
+    # 2. Build adaptive folder icon (native Windows folder + Kotek perched on top) and apply via desktop.ini
     try {
-        $rootClean = $Root.TrimEnd('\')
-        $iniPath = Join-Path $rootClean 'desktop.ini'
-        $iniText = "[.ShellClassInfo]`r`nIconResource=utils\kotek.ico,0`r`nInfoTip=Zapret2 Kotek`r`n"
-        if (Test-Path -LiteralPath $iniPath) {
-            & attrib.exe -h -s "$iniPath" 2>$null | Out-Null
+        $perchPng = Join-Path $Root 'utils\kotek_perch.png'
+        $folderIco = Join-Path $Root 'utils\kotek_folder.ico'
+        $builtIco = $false
+        if (Test-Path -LiteralPath $perchPng) {
+            $builtIco = Build-Z2PerchFolderIcon -PerchPngPath $perchPng -OutIcoPath $folderIco
         }
-        [System.IO.File]::WriteAllText($iniPath, $iniText, (New-Object System.Text.UTF8Encoding($false)))
-        & attrib.exe +h +s "$iniPath" 2>$null | Out-Null
-        & attrib.exe +s "$rootClean" 2>$null | Out-Null
+        if ($builtIco -and (Test-Path -LiteralPath $folderIco)) {
+            $rootClean = $Root.TrimEnd('\')
+            $iniPath = Join-Path $rootClean 'desktop.ini'
+            $iniText = "[.ShellClassInfo]`r`nIconResource=utils\kotek_folder.ico,0`r`nInfoTip=Zapret2 Kotek`r`n"
+            if (Test-Path -LiteralPath $iniPath) {
+                & attrib.exe -h -s "$iniPath" 2>$null | Out-Null
+            }
+            [System.IO.File]::WriteAllText($iniPath, $iniText, (New-Object System.Text.UTF8Encoding($false)))
+            & attrib.exe +h +s "$iniPath" 2>$null | Out-Null
+            & attrib.exe +r +s "$rootClean" 2>$null | Out-Null
+        }
     } catch {}
 }
 
 function Register-Z2UninstallEntry([string]$Root) {
     try {
         $rootClean = $Root.TrimEnd('\')
-        $uninstBat = Join-Path $rootClean 'utils\UNINSTALL.bat'
+        $uninstBat = Join-Path $rootClean 'UNINSTALL.bat'
+        if (-not (Test-Path -LiteralPath $uninstBat)) { $uninstBat = Join-Path $rootClean 'utils\UNINSTALL.bat' }
         if (-not (Test-Path -LiteralPath $uninstBat)) { return }
         $ver = Get-Z2Version $Root
         $ico = Join-Path $rootClean 'utils\kotek.ico'
@@ -296,7 +511,7 @@ function Get-Z2Targets {
     if ($list.Count -eq 0) {
         $fallback = @(
             @{ Cat='YT';  Mode='CORE'; Url='https://www.youtube.com' },
-            @{ Cat='YT';  Mode='CORE'; Url='https://i.ytimg.com/favicon.ico' },
+            @{ Cat='YT';  Mode='CORE'; Url='https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg' },
             @{ Cat='YT';  Mode='CORE'; Url='https://yt3.ggpht.com' },
             @{ Cat='YT';  Mode='CORE'; Url='https://jnn-pa.googleapis.com' },
             @{ Cat='YT';  Mode='CORE'; Url='https://redirector.googlevideo.com' },
@@ -312,7 +527,7 @@ function Get-Z2Targets {
             @{ Cat='TG';  Mode='EXT';  Url='https://t.me' },
             @{ Cat='WEB'; Mode='CORE'; Url='https://cloudflare-dns.com' },
             @{ Cat='WEB'; Mode='CORE'; Url='https://one.one.one.one' },
-            @{ Cat='WEB'; Mode='CORE'; Url='https://speed.cloudflare.com/__down?bytes=65536' },
+            @{ Cat='WEB'; Mode='CORE'; Url='https://speed.cloudflare.com/__down?bytes=262144' },
             @{ Cat='WEB'; Mode='CORE'; Url='https://7tv.io' },
             @{ Cat='WEB'; Mode='CORE'; Url='https://cdn.7tv.app' },
             @{ Cat='WEB'; Mode='CORE'; Url='https://betterttv.net' },
@@ -330,4 +545,15 @@ function Get-Z2Targets {
         }
     }
     return $list.ToArray()
+}
+
+function Get-Z2ZapretDepend {
+    try {
+        $regPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\NlaSvc'
+        if (Test-Path -LiteralPath $regPath) {
+            $st = (Get-ItemProperty -LiteralPath $regPath -Name 'Start' -ErrorAction SilentlyContinue).Start
+            if ($null -ne $st -and [int]$st -ne 4) { return 'BFE/nlasvc' }
+        }
+    } catch {}
+    return 'BFE'
 }

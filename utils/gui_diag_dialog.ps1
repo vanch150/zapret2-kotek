@@ -75,6 +75,7 @@ function Show-Z2DiagDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
         <!-- Summary banner -->
@@ -99,11 +100,26 @@ function Show-Z2DiagDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4
             </ScrollViewer>
         </Border>
 
+        <!-- Quick symptom tags -->
+        <Border Grid.Row="2" Background="#17191F" BorderBrush="#282C34" BorderThickness="1" CornerRadius="6" Padding="10,7" Margin="0,8,0,0">
+            <StackPanel>
+                <TextBlock Text="Что именно не работает? (отметь перед отправкой, по желанию)" FontSize="11.5" Foreground="#9CA3AF" Margin="0,0,0,5"/>
+                <WrapPanel Orientation="Horizontal">
+                    <CheckBox x:Name="ChkSymYtDown" Content="YouTube не грузит" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
+                    <CheckBox x:Name="ChkSymYtSlow" Content="YouTube тормозит / качество" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
+                    <CheckBox x:Name="ChkSymDcVoice" Content="Discord голос / стрим" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
+                    <CheckBox x:Name="ChkSymTg" Content="Telegram" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
+                    <CheckBox x:Name="ChkSymFlaky" Content="То работает, то нет" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
+                    <CheckBox x:Name="ChkSymOther" Content="Другое" Foreground="#D4D7DD" FontSize="12" Margin="0,0,0,3"/>
+                </WrapPanel>
+            </StackPanel>
+        </Border>
+
         <!-- Hint -->
-        <TextBlock x:Name="TxtDiagHint" Grid.Row="2" Text="Отчёт уже скопирован в буфер обмена — при необходимости вставь его в Telegram (Ctrl+V)." FontSize="11.5" Foreground="#9CA3AF" Margin="2,8,2,8" TextWrapping="Wrap"/>
+        <TextBlock x:Name="TxtDiagHint" Grid.Row="3" Text="Отчёт уже скопирован в буфер обмена — при необходимости вставь его в Telegram (Ctrl+V)." FontSize="11.5" Foreground="#9CA3AF" Margin="2,6,2,8" TextWrapping="Wrap"/>
 
         <!-- Footer -->
-        <Grid Grid.Row="3">
+        <Grid Grid.Row="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
@@ -149,6 +165,22 @@ function Show-Z2DiagDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4
     $TxtDiagHint    = $dlg.FindName('TxtDiagHint')
     $BtnDiagCopy    = $dlg.FindName('BtnDiagCopy')
     $BtnDiagSend    = $dlg.FindName('BtnDiagSend')
+    $symChecks = @(
+        @{ Ctrl = $dlg.FindName('ChkSymYtDown');  Tag = 'yt_down' },
+        @{ Ctrl = $dlg.FindName('ChkSymYtSlow');  Tag = 'yt_slow' },
+        @{ Ctrl = $dlg.FindName('ChkSymDcVoice'); Tag = 'dc_voice' },
+        @{ Ctrl = $dlg.FindName('ChkSymTg');      Tag = 'telegram' },
+        @{ Ctrl = $dlg.FindName('ChkSymFlaky');   Tag = 'flaky' },
+        @{ Ctrl = $dlg.FindName('ChkSymOther');   Tag = 'other' }
+    )
+    $getSymptomPrefix = {
+        $tags = New-Object System.Collections.Generic.List[string]
+        foreach ($sc in $symChecks) {
+            if ($null -ne $sc.Ctrl -and $sc.Ctrl.IsChecked) { $tags.Add($sc.Tag) }
+        }
+        if ($tags.Count -gt 0) { return ("Symptom   : " + ($tags -join ', ') + "`r`n") }
+        return ''
+    }
     $BtnDiagOpenTxt = $dlg.FindName('BtnDiagOpenTxt')
     $BtnDiagClose   = $dlg.FindName('BtnDiagClose')
 
@@ -272,6 +304,8 @@ function Show-Z2DiagDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4
             if (-not (Test-Path -LiteralPath $txtPath)) { return }
             $rawRep = Get-Content -LiteralPath $txtPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
             if ([string]::IsNullOrWhiteSpace($rawRep)) { return }
+            $symPfx = & $getSymptomPrefix
+            if ($symPfx) { $rawRep = $symPfx + $rawRep }
             $telPath = Join-Path $Root 'utils\telemetry_helper.ps1'
             if ((Test-Path -LiteralPath $telPath) -and -not (Get-Command Send-Z2TelemetryEvent -ErrorAction SilentlyContinue)) {
                 try { . $telPath } catch {}

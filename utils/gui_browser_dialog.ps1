@@ -14,7 +14,7 @@ function Show-Z2BrowserDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7
     $dlgXamlStr = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Фикс браузеров (QUIC / DoH) — Zapret2 Kotek"
+        Title="Фикс браузеров (QUIC) — Zapret2 Kotek"
         Width="560" Height="450" MinWidth="460" MinHeight="380"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         Background="#121316" Foreground="#D4D7DD" FontFamily="Segoe UI">
@@ -113,7 +113,7 @@ function Show-Z2BrowserDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Margin="0,0,0,12">
-            <TextBlock Text="Выбери браузеры для настройки QUIC / DoH" FontSize="14.5" FontWeight="SemiBold" Foreground="#F1F3F5"/>
+            <TextBlock Text="Выбери браузеры для отключения QUIC (HTTP/3)" FontSize="14.5" FontWeight="SemiBold" Foreground="#F1F3F5"/>
             <TextBlock Text="Опционально: отключает QUIC (HTTP/3) и включает DoH в выбранных браузерах. После изменения перезапусти браузер." FontSize="12" Foreground="#9CA3AF" Margin="0,4,0,0" TextWrapping="Wrap"/>
         </StackPanel>
 
@@ -247,41 +247,13 @@ function Show-Z2BrowserDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7
         }
 
         $setQuic = $true
-        $setDoh  = $true
-        if (-not (Get-Command Get-Z2AiBypassState -ErrorAction SilentlyContinue)) {
-            $aiPath = Join-Path $Root 'utils\ai_bypass_helper.ps1'
-            if (Test-Path -LiteralPath $aiPath) {
-                try { . $aiPath -Root $Root } catch {}
-            }
-        }
-        if (Get-Command Get-Z2AiBypassState -ErrorAction SilentlyContinue) {
-            $aiState = $null
-            try { $aiState = Get-Z2AiBypassState $Root } catch {}
-            if ($null -ne $aiState -and $aiState.Active -and $setDoh) {
-                $ans = 'No'
-                if (Get-Command Show-Z2MessageDialog -ErrorAction SilentlyContinue) {
-                    $ans = Show-Z2MessageDialog -Owner $dlg -Title 'Конфликт DoH и обхода ИИ' -Message "Сейчас активен обход ИИ через SmartDNS (NRPT). Включение DoH в браузере перехватывает DNS и конфликтует с обходом ИИ.`n`nОтключить обход ИИ и включить DoH (Да), или применить только отключение QUIC без DoH (Нет)?" -Kind Warning -Buttons YesNo -AccentHex $accent
-                }
-                if ($ans -eq 'Yes') {
-                    if (Get-Command Disable-Z2AiBypass -ErrorAction SilentlyContinue) {
-                        try { [void](Disable-Z2AiBypass $Root) } catch {}
-                    }
-                    $setDoh = $true
-                } else {
-                    $setDoh = $false
-                }
-            }
-        }
-
+        $setDoh  = $false
         try {
+            [void](Disable-BrowserFix $true $sel.ToArray() $Root $false $true)
             $applied = @(Enable-BrowserFix $sel.ToArray() $Root $setQuic $setDoh | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
             if ($applied.Count -gt 0) { $brState.Changed = $true }
             if ($applied.Count -gt 0) {
-                if ($setDoh) {
-                    $TxtBrowserHint.Text = "Применено для: $($applied -join ', '). Перезапусти браузер."
-                } else {
-                    $TxtBrowserHint.Text = "Применено (только QUIC, без DoH — обход ИИ сохранён) для: $($applied -join ', '). Перезапусти браузер."
-                }
+                $TxtBrowserHint.Text = "QUIC отключён для: $($applied -join ', '). Перезапусти браузер."
                 $TxtBrowserHint.Foreground = $bc.ConvertFromString($accent)
             } else {
                 $TxtBrowserHint.Text = 'Не удалось применить политики (проверь права администратора).'

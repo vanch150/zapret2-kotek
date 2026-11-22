@@ -196,38 +196,32 @@ if ($rootWin) {
     $warpFlag = Join-Path $rootWin 'utils\warp_unblock.enabled'
     if (-not (Test-Path -LiteralPath $warpFlag)) { $warpOn = $false }
 }
-# 1. NLM Filter (--nlm-filter) injection
-$nlmVal = $env:Z2_NLM
-if ([string]::IsNullOrWhiteSpace($nlmVal) -and $rootWin) {
-    $nlmAutoFlag = Join-Path $rootWin 'utils\nlm_auto.enabled'
+# 1. WinDivert per-interface VPN exclusion (--wf-raw-filter=@bin/filters/vpn_exclude.txt)
+$vpnIfIdxActive = $false
+if ($rootWin) {
+    $vpnIfFlag = Join-Path $rootWin 'utils\vpn_ifidx.enabled'
     $nlmHelperPs = Join-Path $rootWin 'utils\nlm_helper.ps1'
-    if (($env:Z2_SKIP_NLM_AUTO -ne '1') -and (Test-Path -LiteralPath $nlmAutoFlag) -and (Test-Path -LiteralPath $nlmHelperPs)) {
-        try { & $nlmHelperPs -Action auto -Root $rootWin | Out-Null } catch {}
-        $global:LASTEXITCODE = 0
-    }
-    $nlmFile = Join-Path $rootWin 'utils\nlm_filter.enabled'
-    if (Test-Path -LiteralPath $nlmFile) {
-        $nlmFirst = Get-Content -LiteralPath $nlmFile -Encoding UTF8 | Select-Object -First 1; if ($null -ne $nlmFirst) { $nlmVal = $nlmFirst.Trim() }
-    }
-}
-if (-not [string]::IsNullOrWhiteSpace($nlmVal) -and $nlmVal -match '^(?i)(NEG:|!)?[0-9A-Fa-f{}\-,]+$') {
-    $hasNlm = $false
-    foreach ($h in $header) { if ($h -match '^(?i)--nlm-filter=') { $hasNlm = $true; break } }
-    if (-not $hasNlm) {
-        if ($nlmVal -match '^(?i)NEG:(.+)$') {
-            $cleanNlm = $matches[1].Trim()
-            if ($cleanNlm) {
-                $header.Add('--nlm-filter=' + $cleanNlm)
-                $header.Add('--nlm-filter-neg=1')
+    if ($env:Z2_SKIP_NLM_AUTO -ne '1' -and (Test-Path -LiteralPath $vpnIfFlag)) {
+        if (Test-Path -LiteralPath $nlmHelperPs) {
+            $prevEap = $ErrorActionPreference
+            try {
+                . $nlmHelperPs -Root $rootWin
+                if (Get-Command Update-Z2VpnIfIdxFilter -ErrorAction SilentlyContinue) {
+                    $uRes = Update-Z2VpnIfIdxFilter $rootWin
+                    if ($null -ne $uRes -and $uRes.Ok) { $vpnIfIdxActive = $true }
+                }
+            } catch {} finally {
+                $ErrorActionPreference = $prevEap
             }
-        } elseif ($nlmVal.StartsWith('!')) {
-            $cleanNlm = $nlmVal.Substring(1).Trim()
-            if ($cleanNlm) {
-                $header.Add('--nlm-filter=' + $cleanNlm)
-                $header.Add('--nlm-filter-neg=1')
+        }
+        $vpnFiltPath = Join-Path $rootWin 'bin\filters\vpn_exclude.txt'
+        if ($vpnIfIdxActive -and (Test-Path -LiteralPath $vpnFiltPath)) {
+            $hasRawF = $false
+            foreach ($h in $header) { if ($h -match '^(?i)--wf-raw-filter=') { $hasRawF = $true; break } }
+            if (-not $hasRawF) {
+                $filtArgPath = $vpnFiltPath.Replace('\', '/')
+                $header.Add('--wf-raw-filter=@' + $filtArgPath)
             }
-        } else {
-            $header.Add('--nlm-filter=' + $nlmVal)
         }
     }
 }
@@ -411,6 +405,28 @@ if ($autoHostOn -and $listsDir) {
             if (-not $hasInRange -and $outRangeIdx -ge 0) {
                 $p.Insert($outRangeIdx, '--in-range=-s4096')
             }
+        }
+    }
+}
+
+# 3a. Ensure the first QUIC UDP 443 hostlist profile also covers list-google.txt (googlevideo.com / YouTube HTTP/3)
+if ($listsDir) {
+    $googleListArg = '--hostlist=' + $listsDir + 'list-google.txt'
+    foreach ($p in $activeProfiles) {
+        $isQuic443 = $false
+        $isQuicL7 = $false
+        $hasGenList = $false
+        $hasGoogleList = $false
+        $genIdx = -1
+        for ($j = 0; $j -lt $p.Count; $j++) {
+            if ($p[$j] -match '(?i)^--filter-udp=.*\b443\b') { $isQuic443 = $true }
+            if ($p[$j] -match '(?i)^--filter-l7=.*\bquic\b') { $isQuicL7 = $true }
+            if ($p[$j] -match '(?i)^--hostlist=.*list-general\.txt$') { $hasGenList = $true; $genIdx = $j }
+            if ($p[$j] -match '(?i)^--hostlist=.*list-google\.txt$') { $hasGoogleList = $true }
+        }
+        if ($isQuic443 -and $isQuicL7 -and $hasGenList -and -not $hasGoogleList -and $genIdx -ge 0) {
+            $p.Insert($genIdx + 1, $googleListArg)
+            break
         }
     }
 }

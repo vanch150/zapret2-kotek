@@ -102,10 +102,13 @@ function Invoke-StrategyProbe([string]$batFullPath, [string]$displayName) {
 
     if ($curlHasParallel) {
         $cArgs = @('-Z', '--parallel-max', '28')
+        $heavyRx = 'speed\.cloudflare\.com|^https?://www\.youtube\.com/?$|i\.ytimg\.com/.+maxresdefault\.jpg'
+        $curlFmt = '%{url_effective}|%{http_code}|%{time_total}|%{size_download}|%{exitcode}|%{speed_download}'
         for ($ui = 0; $ui -lt $TestUrls.Count; $ui++) {
             if ($ui -gt 0) { $cArgs += '-:' }
             $u = $TestUrls[$ui]
-            $cArgs += @('-4', '-s', '--max-time', '4', '-w', '%{url_effective}|%{http_code}|%{time_total}|%{size_download}\n', '-o', 'NUL')
+            $tLim = if ($u -match $heavyRx) { '6' } else { '4' }
+            $cArgs += @('-4', '-s', '--max-time', $tLim, '-w', ($curlFmt + '\n'), '-o', 'NUL')
             if ($u -eq 'https://one.one.one.one' -or $u -eq 'https://cloudflare-dns.com') {
                 $cArgs += @('-H', $padHdr)
             }
@@ -116,19 +119,22 @@ function Invoke-StrategyProbe([string]$batFullPath, [string]$displayName) {
             $rawLines = ($codesOut -split "`r?`n")
         } catch {}
     } else {
+        $heavyRx = 'speed\.cloudflare\.com|^https?://www\.youtube\.com/?$|i\.ytimg\.com/.+maxresdefault\.jpg'
+        $curlFmt = '%{url_effective}|%{http_code}|%{time_total}|%{size_download}|%{exitcode}|%{speed_download}'
         foreach ($u in $TestUrls) {
             try {
+                $tLim = if ($u -match $heavyRx) { '6' } else { '4' }
                 $one = if ($u -eq 'https://one.one.one.one' -or $u -eq 'https://cloudflare-dns.com') {
-                    & $curlExe -4 -s -H $padHdr -o NUL -w '%{url_effective}|%{http_code}|%{time_total}|%{size_download}' --max-time 4 $u 2>$null
+                    & $curlExe -4 -s -H $padHdr -o NUL -w $curlFmt --max-time $tLim $u 2>$null
                 } else {
-                    & $curlExe -4 -s -o NUL -w '%{url_effective}|%{http_code}|%{time_total}|%{size_download}' --max-time 4 $u 2>$null
+                    & $curlExe -4 -s -o NUL -w $curlFmt --max-time $tLim $u 2>$null
                 }
                 if ($one) { $rawLines += $one }
             } catch {}
         }
     }
 
-    $dl16kOk = $false; $canaryHits = 0
+    $cfFreezeOk = $false; $ytFreezeOk = $false; $canaryHits = 0
     foreach ($line in $rawLines) {
         $tr = $line.Trim()
         if (-not $tr) { continue }
@@ -139,15 +145,34 @@ function Invoke-StrategyProbe([string]$batFullPath, [string]$displayName) {
         $tStr = $parts[2].Trim().Replace(',', '.')
         $dlBytes = 0L
         if ($parts.Count -ge 4) { [void][long]::TryParse($parts[3].Trim(), [ref]$dlBytes) }
+        $secVal = 0.0
+        $ms = 500.0
+        if ([double]::TryParse($tStr, [System.Globalization.NumberStyles]::Float, $invCulture, [ref]$secVal)) {
+            $ms = $secVal * 1000.0
+        }
+        $isHeavy = ($uEff -match $heavyRx)
+        $targetMax = if ($isHeavy) { 6.0 } else { 4.0 }
+        $exitOk = $true
+        if ($parts.Count -ge 5 -and $parts[4].Trim() -match '^\d+$') {
+            $exitOk = ($parts[4].Trim() -eq '0')
+        } elseif ($secVal -ge ($targetMax - 0.15)) {
+            $exitOk = $false
+        }
+        $spdBytes = 0.0
+        if ($parts.Count -ge 6) { [void][double]::TryParse($parts[5].Trim().Replace(',', '.'), [System.Globalization.NumberStyles]::Float, $invCulture, [ref]$spdBytes) }
+        if (-not $exitOk) { continue }
         if ($code -match '^(200|204|301|302|307|308|400|403|404)$') {
-            $okCount++
-            $ms = 500.0
-            $secVal = 0.0
-            if ([double]::TryParse($tStr, [System.Globalization.NumberStyles]::Float, $invCulture, [ref]$secVal)) {
-                $ms = $secVal * 1000.0
+            if ($uEff -match '^https?://www\.youtube\.com/?$' -and $code -eq '200' -and $dlBytes -lt 65536) { continue }
+            if ($uEff -match 'speed\.cloudflare\.com') {
+                $cfMin = if ($uEff -match '262144') { 200000L } else { 50000L }
+                if ($dlBytes -lt $cfMin) { continue }
+                $cfFreezeOk = $true
             }
+            $okCount++
             $totalMs += $ms
-            if ($uEff -match 'speed\.cloudflare\.com' -and $dlBytes -ge 32768) { $dl16kOk = $true }
+            if (($uEff -match 'i\.ytimg\.com/.+maxresdefault\.jpg' -or $uEff -match '^https?://www\.youtube\.com/?$') -and $code -eq '200' -and $dlBytes -ge 65536 -and $spdBytes -ge 40000) {
+                $ytFreezeOk = $true
+            }
             if ($uEff -match 'github\.com|githubusercontent\.com' -and $ms -le 2000.0) { $canaryHits++ }
             if ($uEff -match 'youtube\.com|ytimg\.com|ggpht\.com|googleapis\.com|googlevideo\.com|play\.google\.com') {
                 $ytHits++; $ytMs += $ms
@@ -158,7 +183,7 @@ function Invoke-StrategyProbe([string]$batFullPath, [string]$displayName) {
             }
         }
     }
-    $freezeOk = $dl16kOk
+    $freezeOk = ($cfFreezeOk -and $ytFreezeOk)
 
     if ($proc -and -not $proc.HasExited) {
         try { $proc.Kill(); [void]$proc.WaitForExit(3000) } catch {}
@@ -170,11 +195,11 @@ function Invoke-StrategyProbe([string]$batFullPath, [string]$displayName) {
     $dcAvg = if ($dcHits -gt 0) { [int][Math]::Round($dcMs / $dcHits) } else { 3000 }
     $webAvg = if ($webHits -gt 0) { [int][Math]::Round($webMs / $webHits) } else { 3000 }
 
-    $ytScore  = ($ytHits * 100) + [Math]::Max(0, [int](50 - ($ytAvg / 40.0)))
+    $ytScore  = ($ytHits * 100) + ($(if ($ytFreezeOk) { 120 } else { 0 })) + [Math]::Max(0, [int](50 - ($ytAvg / 40.0)))
     $dcScore  = ($dcHits * 100) + [Math]::Max(0, [int](50 - ($dcAvg / 40.0)))
-    $webScore = ($webHits * 100) + ($(if ($freezeOk) { 80 } else { 0 })) + [Math]::Max(0, [int](50 - ($webAvg / 40.0)))
+    $webScore = ($webHits * 100) + ($(if ($cfFreezeOk) { 80 } else { 0 })) + [Math]::Max(0, [int](50 - ($webAvg / 40.0)))
     $canaryPen = if ($canaryHits -eq 0 -and $okCount -ge 6) { -30 } else { 0 }
-    $totScore = ($okCount * 20) + ($(if ($ytHits -ge 2) { 45 } else { 0 })) + ($(if ($dcHits -ge 2) { 35 } else { 0 })) + ($(if ($freezeOk) { 30 } else { 0 })) + [Math]::Max(0, [int](30 - ($avgMs / 50.0))) + $canaryPen
+    $totScore = ($okCount * 20) + ($(if ($ytHits -ge 2 -and $ytFreezeOk) { 45 } else { 0 })) + ($(if ($ytFreezeOk) { 35 } else { 0 })) + ($(if ($dcHits -ge 2) { 35 } else { 0 })) + ($(if ($cfFreezeOk) { 30 } else { 0 })) + [Math]::Max(0, [int](30 - ($avgMs / 50.0))) + $canaryPen
 
     $frLbl = if ($freezeOk) { 'OK  ' } else { 'SLOW' }
     Write-Host ("`r" + (" " * 86) + "`r") -NoNewline
@@ -188,7 +213,7 @@ function Invoke-StrategyProbe([string]$batFullPath, [string]$displayName) {
             if ($prevSc) { foreach ($pr in $prevSc.PSObject.Properties) { $scMap[$pr.Name] = $pr.Value } }
         }
         $leafKey = [System.IO.Path]::GetFileName($batFullPath)
-        $scMap[$leafKey] = [PSCustomObject]@{ ok=$okCount; total=$TestUrls.Count; ms=$avgMs; yt=($ytHits -ge 2); dc=($dcHits -ge 2); ytHits=$ytHits; ytTotal=$ytTotal; dcHits=$dcHits; dcTotal=$dcTotal; freeze=$freezeOk; ts=(Get-Date -Format 'yyyy-MM-dd HH:mm') }
+        $scMap[$leafKey] = [PSCustomObject]@{ ok=$okCount; total=$TestUrls.Count; ms=$avgMs; yt=($ytHits -ge 2); dc=($dcHits -ge 2); ytHits=$ytHits; ytTotal=$ytTotal; dcHits=$dcHits; dcTotal=$dcTotal; freeze=$freezeOk; ytF=$ytFreezeOk; cfF=$cfFreezeOk; ts=(Get-Date -Format 'yyyy-MM-dd HH:mm') }
         [System.IO.File]::WriteAllText($scFile, ($scMap | ConvertTo-Json -Depth 4), (New-Object System.Text.UTF8Encoding($false)))
     } catch {}
     return [PSCustomObject]@{
@@ -197,6 +222,8 @@ function Invoke-StrategyProbe([string]$batFullPath, [string]$displayName) {
         OkCount   = $okCount
         AvgMs     = $avgMs
         FreezeOk  = $freezeOk
+        YtFreezeOk = $ytFreezeOk
+        CfFreezeOk = $cfFreezeOk
         YtHits    = $ytHits
         YtAvg     = $ytAvg
         YtScore   = $ytScore
@@ -432,6 +459,29 @@ try {
         Write-Host "`n  [ПОБЕДИТЕЛЬ] Гибрид $installName стал лучшим ($($synthRes.OkCount)/$($TestUrls.Count), ~$($synthRes.AvgMs) мс)!" -ForegroundColor Green
     }
 
+    # Save anonymized hybrid recipe for GUI & opt-in telemetry statistics
+    try {
+        $winResObj = if ($installName -eq 'custom_auto_synthesized.bat' -and $null -ne $synthRes) { $synthRes } else { $bestOverall }
+        $udpFakeNow = ''
+        $ufFile = Join-Path $Root 'utils\active_udp_fake.txt'
+        if (Test-Path -LiteralPath $ufFile) { $udpFakeNow = ([string](Get-Content -LiteralPath $ufFile -TotalCount 1 -Encoding UTF8 -ErrorAction SilentlyContinue)).Trim() }
+        $hybObj = [PSCustomObject]@{
+            yt     = Split-Path -Leaf $bestYt.Path
+            dc     = Split-Path -Leaf $bestDc.Path
+            web    = Split-Path -Leaf $bestWeb.Path
+            udp    = $udpFakeNow
+            winner = Split-Path -Leaf $installBat
+            ok     = [int]$winResObj.OkCount
+            total  = [int]$TestUrls.Count
+            pct    = if ($TestUrls.Count -gt 0) { [int][Math]::Round(100.0 * $winResObj.OkCount / $TestUrls.Count) } else { 0 }
+            ytF    = [bool]$winResObj.YtFreezeOk
+            cfF    = [bool]$winResObj.CfFreezeOk
+            ms     = [int]$winResObj.AvgMs
+            ts     = (Get-Date -Format 'yyyy-MM-dd HH:mm')
+        }
+        [System.IO.File]::WriteAllText((Join-Path $Root 'utils\last_hybrid.json'), ($hybObj | ConvertTo-Json -Compress), $utf8NoBom)
+    } catch {}
+
     $ans = if ($NonInteractive) { "y" } else { Read-Host "`n  Установить победителя ($installName) в службу zapret прямо сейчас? [Д/н] (Enter = Да)" }
     if ([string]::IsNullOrWhiteSpace($ans) -or $ans -notmatch '^[nNнН]') {
         $gfFile = Join-Path $Root 'utils\game_filter.enabled'
@@ -483,16 +533,18 @@ try {
         }
         Move-Item -LiteralPath $tmpLiveConf -Destination $liveConfPath -Force -ErrorAction Stop
 
+        $zDepend = if (Get-Command Get-Z2ZapretDepend -ErrorAction SilentlyContinue) { Get-Z2ZapretDepend } else { 'BFE/nlasvc' }
         if ($svcExists) {
-            $pCfg = Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "config zapret binPath= `"$binEsc`" DisplayName= `"zapret`" start= auto" -WindowStyle Hidden -Wait -PassThru
+            $pCfg = Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "config zapret binPath= `"$binEsc`" DisplayName= `"zapret`" start= auto depend= $zDepend" -WindowStyle Hidden -Wait -PassThru
             if ($pCfg.ExitCode -ne 0) {
-                Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "create zapret binPath= `"$binEsc`" DisplayName= `"zapret`" start= auto" -WindowStyle Hidden -Wait | Out-Null
+                Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "create zapret binPath= `"$binEsc`" DisplayName= `"zapret`" start= auto depend= $zDepend" -WindowStyle Hidden -Wait | Out-Null
             }
         } else {
-            Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "create zapret binPath= `"$binEsc`" DisplayName= `"zapret`" start= auto" -WindowStyle Hidden -Wait | Out-Null
+            Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "create zapret binPath= `"$binEsc`" DisplayName= `"zapret`" start= auto depend= $zDepend" -WindowStyle Hidden -Wait | Out-Null
         }
         Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "description zapret `"Zapret2 DPI bypass software (winws2)`"" -WindowStyle Hidden -Wait | Out-Null
         Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "failure zapret reset= 60 actions= restart/2000/restart/5000/restart/10000" -WindowStyle Hidden -Wait | Out-Null
+        Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "failureflag zapret 1" -WindowStyle Hidden -Wait | Out-Null
         Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "start zapret" -WindowStyle Hidden -Wait | Out-Null
         $startedOk = $false
         for ($w = 0; $w -lt 10; $w++) {

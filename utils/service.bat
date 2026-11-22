@@ -3,7 +3,7 @@ chcp 65001 > nul
 set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 for %%I in ("%~dp0..") do set "Z2_ROOT=%%~fI"
 set "Z2_BASE=%Z2_ROOT%\"
-set "LOCAL_VERSION=1.1.0"
+set "LOCAL_VERSION=1.1.1"
 if exist "%Z2_BASE%utils\version.txt" set /p LOCAL_VERSION=<"%Z2_BASE%utils\version.txt"
 
 :: =====================================================================

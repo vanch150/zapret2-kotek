@@ -85,13 +85,15 @@ try {
     $winwsExe   = Join-Path $Root 'bin\winws2.exe'
     $binEscaped = "\`"$winwsExe\`" @\`"$confWin\`""
 
+    $zDepend = if (Get-Command Get-Z2ZapretDepend -ErrorAction SilentlyContinue) { Get-Z2ZapretDepend } else { 'BFE/nlasvc' }
     if ($svcExists) {
-        Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "config zapret binPath= `"$binEscaped`" start= auto" -WindowStyle Hidden -Wait | Out-Null
+        Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "config zapret binPath= `"$binEscaped`" start= auto depend= $zDepend" -WindowStyle Hidden -Wait | Out-Null
     } else {
-        Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "create zapret binPath= `"$binEscaped`" DisplayName= `"zapret`" start= auto" -WindowStyle Hidden -Wait | Out-Null
+        Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "create zapret binPath= `"$binEscaped`" DisplayName= `"zapret`" start= auto depend= $zDepend" -WindowStyle Hidden -Wait | Out-Null
     }
     Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "description zapret `"Zapret2 Kotek DPI bypass software (winws2)`"" -WindowStyle Hidden -Wait | Out-Null
     Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "failure zapret reset= 60 actions= restart/2000/restart/5000/restart/10000" -WindowStyle Hidden -Wait | Out-Null
+    Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "failureflag zapret 1" -WindowStyle Hidden -Wait | Out-Null
     Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "start zapret" -WindowStyle Hidden -Wait | Out-Null
 
     $startedOk = $false

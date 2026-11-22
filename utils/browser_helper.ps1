@@ -218,8 +218,7 @@ function Get-Z2BrowserStates {
                 $statusText = "вручную ($($b.ManualTip))"
             } else {
                 $qS = if ($quicOff) { 'QUIC выкл' } else { 'QUIC по умолч.' }
-                $dS = if ($dohOn) { 'DoH вкл' } else { 'DoH по умолч.' }
-                $statusText = "$qS · $dS"
+                $statusText = if ($dohOn) { "$qS · DoH вкл (устар.)" } else { $qS }
             }
             $res.Add([PSCustomObject]@{
                 Id         = $b.Id
@@ -274,7 +273,7 @@ function Update-Z2BrowserMarker([string]$RootPath) {
     }
 }
 
-function Enable-BrowserFix([string[]]$FilterIds = @(), [string]$RootPath = '', [bool]$SetQuic = $true, [bool]$SetDoh = $true) {
+function Enable-BrowserFix([string[]]$FilterIds = @(), [string]$RootPath = '', [bool]$SetQuic = $true, [bool]$SetDoh = $false) {
     if (-not $SetQuic -and -not $SetDoh) { return @() }
     if (-not $RootPath) { $RootPath = $Root }
     $det = Get-Z2BrowserStates
@@ -489,7 +488,7 @@ if ($MyInvocation.InvocationName -ne '.') {
     }
     if ($Action -eq 'prompt') {
         Write-Host ''
-        Write-Host '  [?] Применить фикс браузеров (отключить QUIC + включить DoH)?' -ForegroundColor Yellow
+        Write-Host '  [?] Применить фикс браузеров (отключить QUIC)?' -ForegroundColor Yellow
         Show-BrowserStatus
         $ans = Read-Host '      Применить для обнаруженных браузеров? [y/N]'
         if ($ans -match '^[yYдД]') { [void](Enable-BrowserFix @() $Root) }
@@ -499,11 +498,11 @@ if ($MyInvocation.InvocationName -ne '.') {
         Clear-Host
         Write-Host ''
         Write-Host '  ==============================================================' -ForegroundColor Cyan
-        Write-Host '        НАСТРОЙКА БРАУЗЕРОВ (QUIC / DoH) — ZAPRET2 KOTEK        ' -ForegroundColor Cyan
+        Write-Host '          НАСТРОЙКА БРАУЗЕРОВ (QUIC) — ZAPRET2 KOTEK          ' -ForegroundColor Cyan
         Write-Host '  ==============================================================' -ForegroundColor Cyan
         Show-BrowserStatus
         Write-Host '  --------------------------------------------------------------'
-        Write-Host '  [1] Применить фикс (QUIC выкл + DoH вкл) для всех найденных' -ForegroundColor Green
+        Write-Host '  [1] Применить фикс (отключить QUIC) для всех найденных' -ForegroundColor Green
         Write-Host '  [2] Вернуть стандартные настройки браузеров' -ForegroundColor Yellow
         Write-Host '  [0] Назад'
         Write-Host '  --------------------------------------------------------------'

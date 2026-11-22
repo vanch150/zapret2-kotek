@@ -18,7 +18,7 @@ $Root = if (Get-Command Resolve-Z2Root -ErrorAction SilentlyContinue) {
 }
 
 $verFile = Join-Path $Root 'utils\version.txt'
-$CurrentVersion = if (Test-Path -LiteralPath $verFile) { ([string](Get-Content -LiteralPath $verFile -TotalCount 1)).Trim() } else { '1.0.9' }
+$CurrentVersion = if (Test-Path -LiteralPath $verFile) { ([string](Get-Content -LiteralPath $verFile -TotalCount 1)).Trim() } else { '1.1.1' }
 
 # SemVer-aware comparator: 1.0.8 > 1.0.8-rc1 > 1.0.8-beta.2 (ID 4.15)
 function Compare-KotekVersion([string]$a, [string]$b) {
@@ -363,10 +363,11 @@ $preserveRel = @(
     'utils\browser_policy.applied',
     'utils\nlm_filter.init',
     'utils\last_autosetup.json',
+    'utils\last_hybrid.json',
     'utils\telemetry.state.json',
-    'utils\nlm_auto.enabled',
-    'utils\nlm_filter.enabled',
-    'utils\nlm_filter.names',
+    'utils\vpn_ifidx.enabled',
+    'utils\vpn_ifidx.custom',
+    'utils\vpn_ifidx.names',
     'utils\.tgws_connected',
     'utils\repo.conf',
     'utils\autoupdate.mode',
@@ -385,7 +386,7 @@ $preserveRel = @(
     'strategies\custom_auto_synthesized.bat',
     'custom_auto_synthesized.bat'
 )
-$boolFlagsToTrack = @('utils\autohostlist.enabled', 'utils\warp_unblock.enabled', 'utils\kernel_filter.enabled', 'utils\nlm_auto.enabled', 'utils\nlm_filter.enabled', 'utils\telemetry.enabled', 'utils\game_filter.enabled', 'utils\tray_mode.enabled', 'utils\tray_start_minimized.enabled')
+$boolFlagsToTrack = @('utils\autohostlist.enabled', 'utils\warp_unblock.enabled', 'utils\kernel_filter.enabled', 'utils\vpn_ifidx.enabled', 'utils\telemetry.enabled', 'utils\game_filter.enabled', 'utils\tray_mode.enabled', 'utils\tray_start_minimized.enabled')
 $absentBoolFlags = New-Object System.Collections.Generic.List[string]
 if (Test-Path -LiteralPath $verFile) {
     foreach ($bf in $boolFlagsToTrack) {
@@ -523,7 +524,7 @@ if (Test-Path -LiteralPath (Join-Path $srcRoot 'strategies')) {
         $oldRootBat = Join-Path $Root $sf.Name
         if (Test-Path -LiteralPath $oldRootBat) { Remove-Item -LiteralPath $oldRootBat -Force -ErrorAction SilentlyContinue }
     }
-    foreach ($legacyRootBat in @('DEEP_OPTIMIZE.bat','1_AUTO_SETUP.bat','2_KOTEK.bat','KOTEK.bat','service.bat','README_ZAPRET2_RU.txt','AUTO_SETUP.bat','PAUSE_RESUME.bat','UNINSTALL.bat')) {
+    foreach ($legacyRootBat in @('DEEP_OPTIMIZE.bat','1_AUTO_SETUP.bat','2_KOTEK.bat','KOTEK.bat','service.bat','README_ZAPRET2_RU.txt','AUTO_SETUP.bat','PAUSE_RESUME.bat')) {
         $oldB = Join-Path $Root $legacyRootBat
         if (Test-Path -LiteralPath $oldB) { Remove-Item -LiteralPath $oldB -Force -ErrorAction SilentlyContinue }
     }
@@ -553,8 +554,14 @@ foreach ($relPath in $preserveRel) {
                 $haveUrls = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
                 $mergedTgt = New-Object System.Collections.Generic.List[string]
                 foreach ($ol in $oldTgtLines) {
-                    $mergedTgt.Add($ol)
-                    if ($ol -match '^[^#]*\|(https?://\S+)') { [void]$haveUrls.Add($matches[1].Trim()) }
+                    $olUpd = $ol
+                    if ($olUpd -match '(?i)https://i\.ytimg\.com/favicon\.ico\s*$') {
+                        $olUpd = $olUpd -replace '(?i)https://i\.ytimg\.com/favicon\.ico', 'https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg'
+                    } elseif ($olUpd -match '(?i)https://speed\.cloudflare\.com/__down\?bytes=65536\s*$') {
+                        $olUpd = $olUpd -replace '(?i)bytes=65536', 'bytes=262144'
+                    }
+                    $mergedTgt.Add($olUpd)
+                    if ($olUpd -match '^[^#]*\|(https?://\S+)') { [void]$haveUrls.Add($matches[1].Trim()) }
                 }
                 foreach ($nl in $newTgtLines) {
                     if ($nl -match '^[^#]*\|(https?://\S+)') {
@@ -572,6 +579,32 @@ foreach ($relPath in $preserveRel) {
 foreach ($abFlag in $absentBoolFlags) {
     $abPath = Join-Path $Root $abFlag
     if (Test-Path -LiteralPath $abPath) { Remove-Item -LiteralPath $abPath -Force -ErrorAction SilentlyContinue }
+}
+
+# One-time migration from <= 1.1.0 to 1.1.1: clear forced-on nlm_auto and raise circular thresholds in custom_auto_synthesized.bat
+if ((Compare-KotekVersion $CurrentVersion '1.1.0') -le 0) {
+    foreach ($mf in @('utils\nlm_auto.enabled', 'utils\nlm_filter.enabled', 'utils\nlm_filter.names')) {
+        $mfp = Join-Path $Root $mf
+        if (Test-Path -LiteralPath $mfp) { Remove-Item -LiteralPath $mfp -Force -ErrorAction SilentlyContinue }
+    }
+    try { [System.IO.File]::WriteAllText((Join-Path $Root 'utils\vpn_ifidx.enabled'), "1`r`n", (New-Object System.Text.UTF8Encoding($false))) } catch {}
+    $migSynth = Join-Path $Root 'strategies\custom_auto_synthesized.bat'
+    if (Test-Path -LiteralPath $migSynth) {
+        try {
+            $sRaw = [System.IO.File]::ReadAllText($migSynth, [System.Text.Encoding]::UTF8)
+            if ($sRaw -like '*circular:fails=1:time=60:reset:retrans=2*') {
+                $sRaw = $sRaw.Replace('circular:fails=1:time=60:reset:retrans=2', 'circular:fails=3:time=60:reset:retrans=4')
+                [System.IO.File]::WriteAllText($migSynth, $sRaw, (New-Object System.Text.UTF8Encoding($false)))
+            }
+        } catch {}
+    }
+    $migBh = Join-Path $Root 'utils\browser_helper.ps1'
+    if (Test-Path -LiteralPath $migBh) {
+        try {
+            . $migBh -Root $Root
+            [void](Disable-BrowserFix $true @() $Root $false $true)
+        } catch {}
+    }
 }
 
 Write-Host '  [5/5] Пересборка конфигурации и перезапуск служб...' -ForegroundColor Yellow
@@ -616,6 +649,11 @@ if ($wasZapret) {
         Write-Host "  [!] Предупреждение: ошибка пересборки bin\service.conf ($($_.Exception.Message)) — служба zapret не запущена." -ForegroundColor Yellow
     }
     if ($confBuiltOk) {
+        try {
+            $zDepend = if (Get-Command Get-Z2ZapretDepend -ErrorAction SilentlyContinue) { Get-Z2ZapretDepend } else { 'BFE/nlasvc' }
+            Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "config zapret depend= $zDepend" -WindowStyle Hidden -Wait | Out-Null
+            Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "failureflag zapret 1" -WindowStyle Hidden -Wait | Out-Null
+        } catch {}
         Start-Service -Name 'zapret' -ErrorAction SilentlyContinue
     }
 }
@@ -653,7 +691,7 @@ if ($wasTgws) {
 
 if (Test-Path -LiteralPath $updMarker) { Remove-Item -LiteralPath $updMarker -Force -ErrorAction SilentlyContinue }
 Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
-try { . (Join-Path $Root 'utils\common.ps1'); Register-Z2UninstallEntry $Root } catch {}
+try { . (Join-Path $Root 'utils\common.ps1'); Register-Z2UninstallEntry $Root; Set-Z2DesktopAndFolderIcons $Root -FolderOnly } catch {}
 
 Write-Host ''
 Write-Host '  ==================================================================' -ForegroundColor Green

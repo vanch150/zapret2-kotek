@@ -309,8 +309,7 @@ function Get-Z2ActiveVpnInfo {
             $nName = [string]$ni.Name
             $nDesc = [string]$ni.Description
             if ($nName -match $script:Z2AiVpnExcludeRx -or $nDesc -match $script:Z2AiVpnExcludeRx) { continue }
-            $isVpn = ($ni.NetworkInterfaceType -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Ppp) -or
-                     ($nName -match $script:Z2AiVpnRx) -or
+            $isVpn = ($nName -match $script:Z2AiVpnRx) -or
                      ($nDesc -match $script:Z2AiVpnRx)
             if ($isVpn) {
                 $disp = if ($nName) { $nName } else { $nDesc }
@@ -411,8 +410,15 @@ function Test-Z2AiSmartDns([string]$DnsIp, [string]$TestHost = 'gemini.google.co
     $res.ResolvedIp = $resolvedIp
     $curlExe = "$env:SystemRoot\System32\curl.exe"
     if (Test-Path -LiteralPath $curlExe) {
-        $code = & $curlExe -4 -s -o NUL -w '%{http_code}' --max-time 4 --resolve "${TestHost}:443:$resolvedIp" "https://$TestHost" 2>$null
-        if ($code) { $res.HttpCode = [string]$code }
+        $rawProbe = [string](& $curlExe -4 -s -o NUL -w '%{http_code}|%{redirect_url}' --max-time 4 --resolve "${TestHost}:443:$resolvedIp" "https://$TestHost" 2>$null)
+        $pParts = $rawProbe.Trim() -split '\|', 2
+        if ($pParts.Count -ge 1 -and $pParts[0]) { $res.HttpCode = $pParts[0].Trim() }
+        $redirUrl = if ($pParts.Count -ge 2) { $pParts[1].Trim() } else { '' }
+        if ($redirUrl -match '(?i)/sorry\b' -or ($res.HttpCode -eq '429' -and $TestHost -match '(?i)google\.com$')) {
+            $res.Ok = $false
+            $res.Reason = "Google антибот (/sorry) на $resolvedIp — переключаюсь на другой узел"
+            return $res
+        }
         if ($res.HttpCode -match '^([23]\d\d|401|403|405|429)$') {
             $res.Ok = $true
             $res.Reason = "HTTP $($res.HttpCode) через $resolvedIp"

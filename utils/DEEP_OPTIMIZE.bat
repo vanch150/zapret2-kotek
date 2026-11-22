@@ -2,7 +2,7 @@
 chcp 65001 > nul
 set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 for %%I in ("%~dp0..") do set "Z2_ROOT=%%~fI"
-set "Z2_VER=1.0.9"
+set "Z2_VER=1.1.1"
 if exist "%Z2_ROOT%\utils\version.txt" set /p Z2_VER=<"%Z2_ROOT%\utils\version.txt"
 title Zapret2 Kotek v%Z2_VER% — Deep Optimize (=^^.^^=)
 cd /d "%Z2_ROOT%"
