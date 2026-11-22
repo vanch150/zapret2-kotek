@@ -42,21 +42,30 @@
 
 Удалить программу полностью (включая службы, драйвер, правила DNS и `hosts`) можно из настроек приложения или файлом `utils\UNINSTALL.bat`.
 
-<details>
-<summary>Ещё скриншоты интерфейса</summary>
-
-![Стратегии](docs/screenshots/strategies.png)
-
-![Настройки](docs/screenshots/settings.png)
+## Интерфейс
 
 <table>
 <tr>
-<td width="50%"><img src="docs/screenshots/lists_dialog.png" alt="Свои списки сайтов" /></td>
-<td width="50%"><img src="docs/screenshots/nlm_dialog.png" alt="Исключение VPN-адаптеров" /></td>
+<td width="50%">
+<img src="docs/screenshots/strategies.png" alt="Вкладка Стратегии" />
+<p align="center"><sub>Стратегии и результаты проверки</sub></p>
+</td>
+<td width="50%">
+<img src="docs/screenshots/settings.png" alt="Вкладка Настройки" />
+<p align="center"><sub>Настройки, диагностика и автообновление</sub></p>
+</td>
+</tr>
+<tr>
+<td width="50%">
+<img src="docs/screenshots/lists_dialog.png" alt="Свои списки сайтов" />
+<p align="center"><sub>Редактор своих списков сайтов</sub></p>
+</td>
+<td width="50%">
+<img src="docs/screenshots/nlm_dialog.png" alt="Исключение VPN-адаптеров" />
+<p align="center"><sub>Исключение VPN-адаптеров (NLM)</sub></p>
+</td>
 </tr>
 </table>
-
-</details>
 
 ## Что стоит учитывать
 
