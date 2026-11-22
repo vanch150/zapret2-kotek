@@ -1645,7 +1645,6 @@ $script:CatTimer.Add_Tick({
                     Sync-AutoDoneUpdBtn
                     $AutoDoneCard.Visibility = 'Visible'
                     Switch-Nav 'home'
-                    Invoke-Z2TelemetryPromptOnce
                 }
             }
         }

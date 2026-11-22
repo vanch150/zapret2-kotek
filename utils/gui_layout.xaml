@@ -768,7 +768,7 @@
                         </Border>
                     </Grid>
 
-                    <TextBlock Text="Telegram" FontSize="14" FontWeight="SemiBold" Foreground="#737A86" Margin="2,0,0,8"/>
+                    <TextBlock Text="Telegram и ИИ" FontSize="14" FontWeight="SemiBold" Foreground="#737A86" Margin="2,0,0,8"/>
 
                     <Border Style="{StaticResource GroupPanel}">
                         <Grid Margin="16,14">

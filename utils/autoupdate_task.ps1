@@ -59,8 +59,8 @@ if ($Action -eq 'enable') {
 
     try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
 
-    # Inside C:\Users\... (Desktop/Downloads/etc.) do NOT strip inherited user ACLs (/inheritance:r breaks Explorer/write access);
-    # outside C:\Users\... (e.g. C:\Zapret2) apply full hardened owner & NTFS ACLs.
+    # Inside user profile folders (Desktop/Downloads/etc.) do NOT strip inherited user ACLs (/inheritance:r breaks Explorer/write access);
+    # outside profile folders (e.g. C:\Zapret2) apply full hardened owner & NTFS ACLs.
     if ($RootTrim -match '(?i)\\Users\\') {
         try { & $IcaclsExe "$RootTrim" /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C /L /Q >$null 2>&1 } catch {}
     } else {
