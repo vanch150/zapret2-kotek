@@ -59,16 +59,21 @@ if ($Action -eq 'enable') {
 
     try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
 
-    # Harden owner and NTFS ACLs across the ENTIRE root folder so unprivileged users cannot tamper with scripts run by SYSTEM
-    $global:LASTEXITCODE = 0
-    & $IcaclsExe "$RootTrim" /setowner "*S-1-5-32-544" /T /C /L /Q >$null 2>&1
-    $ownRc = $LASTEXITCODE
-    $global:LASTEXITCODE = 0
-    & $IcaclsExe "$RootTrim" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" /grant:r "*S-1-5-32-544:(OI)(CI)F" /grant:r "*S-1-5-32-545:(OI)(CI)RX" /T /C /L /Q >$null 2>&1
-    $aclRc = $LASTEXITCODE
-    if ($ownRc -ne 0 -or $aclRc -ne 0) {
-        Write-Host "[X] Ошибка защиты прав доступа (icacls owner=$ownRc, acl=$aclRc) — задача SYSTEM не зарегистрирована." -ForegroundColor Red
-        exit 1
+    # Inside C:\Users\... (Desktop/Downloads/etc.) do NOT strip inherited user ACLs (/inheritance:r breaks Explorer/write access);
+    # outside C:\Users\... (e.g. C:\Zapret2) apply full hardened owner & NTFS ACLs.
+    if ($RootTrim -match '(?i)\\Users\\') {
+        try { & $IcaclsExe "$RootTrim" /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C /L /Q >$null 2>&1 } catch {}
+    } else {
+        $global:LASTEXITCODE = 0
+        & $IcaclsExe "$RootTrim" /setowner "*S-1-5-32-544" /T /C /L /Q >$null 2>&1
+        $ownRc = $LASTEXITCODE
+        $global:LASTEXITCODE = 0
+        & $IcaclsExe "$RootTrim" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" /grant:r "*S-1-5-32-544:(OI)(CI)F" /grant:r "*S-1-5-32-545:(OI)(CI)RX" /T /C /L /Q >$null 2>&1
+        $aclRc = $LASTEXITCODE
+        if ($ownRc -ne 0 -or $aclRc -ne 0) {
+            Write-Host "[X] Ошибка защиты прав доступа (icacls owner=$ownRc, acl=$aclRc) — задача SYSTEM не зарегистрирована." -ForegroundColor Red
+            exit 1
+        }
     }
 
     # Restore minimal NetworkService (*S-1-5-20) rights so zapret-tgws service keeps working
