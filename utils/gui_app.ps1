@@ -2911,6 +2911,20 @@ $script:WpfApp.Add_DispatcherUnhandledException({
 
 # Unified ContentRendered handler: sequential relocation (AutoStart) + foreign/Kotek service migration (ID 3.1, 3.8, 6.2)
 $win.Add_ContentRendered({
+    try {
+        if ($Root -notmatch '^[A-Za-z]:\\$') {
+            $fIcoChk = Join-Path $Root 'utils\kotek_folder.ico'
+            $fIniChk = Join-Path $Root 'desktop.ini'
+            $rootDirAttr = [System.IO.FileAttributes]0
+            try { $rootDirAttr = (Get-Item -LiteralPath (Format-Z2DirNoSlash $Root) -Force).Attributes } catch {}
+            $hasRo = (($rootDirAttr -band [System.IO.FileAttributes]::ReadOnly) -ne 0)
+            if ((-not (Test-Path -LiteralPath $fIcoChk)) -or (-not (Test-Path -LiteralPath $fIniChk)) -or (-not $hasRo)) {
+                if (Get-Command Set-Z2DesktopAndFolderIcons -ErrorAction SilentlyContinue) {
+                    Set-Z2DesktopAndFolderIcons $Root -FolderOnly
+                }
+            }
+        }
+    } catch {}
     if ($AutoStart) {
         $needsMove = (-not $script:IsDevWorkspace) -and ($Root -notmatch '^(?i)C:\\Zapret2\\?$') -and (
             ($Root -match '(?i)\\(Downloads|Desktop|OneDrive|Temp)\\') -or
@@ -3098,17 +3112,6 @@ $win.Add_ContentRendered({
                         }
                         return
                     }
-                }
-            }
-        }
-    } catch {}
-    try {
-        if ($Root -notmatch '^[A-Za-z]:\\$') {
-            $fIcoChk = Join-Path $Root 'utils\kotek_folder.ico'
-            $fIniChk = Join-Path $Root 'desktop.ini'
-            if ((-not (Test-Path -LiteralPath $fIcoChk)) -or (-not (Test-Path -LiteralPath $fIniChk))) {
-                if (Get-Command Set-Z2DesktopAndFolderIcons -ErrorAction SilentlyContinue) {
-                    Set-Z2DesktopAndFolderIcons $Root -FolderOnly
                 }
             }
         }

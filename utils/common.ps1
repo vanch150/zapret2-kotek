@@ -440,17 +440,25 @@ function Set-Z2DesktopAndFolderIcons([string]$Root, [switch]$FolderOnly) {
             $happyPng = Join-Path $Root 'utils\kotek_happy.png'
             $builtIco = Build-Z2PerchFolderIcon -PerchPngPath $perchPng -OutIcoPath $folderIco -BadgePngPath $happyPng
         }
+        $iconRel = $null
         if ($builtIco -and (Test-Path -LiteralPath $folderIco)) {
+            $iconRel = 'utils\kotek_folder.ico'
+        } elseif (Test-Path -LiteralPath $icoPath) {
+            $iconRel = 'utils\kotek.ico'
+        }
+        if ($iconRel) {
             $rootClean = Format-Z2DirNoSlash $Root
             $iniPath = Join-Path $Root 'desktop.ini'
-            $attribExe = "$env:SystemRoot\System32\attrib.exe"
-            $iniText = "[.ShellClassInfo]`r`nIconResource=utils\kotek_folder.ico,0`r`nInfoTip=Zapret2 Kotek`r`n"
+            $iniText = "[.ShellClassInfo]`r`nIconResource=$iconRel,0`r`nInfoTip=Zapret2 Kotek`r`n"
             if (Test-Path -LiteralPath $iniPath) {
-                & $attribExe -h -s "$iniPath" 2>$null | Out-Null
+                $iniItem = Get-Item -LiteralPath $iniPath -Force
+                $iniItem.Attributes = $iniItem.Attributes -band (-bnot ([System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::System -bor [System.IO.FileAttributes]::ReadOnly))
             }
             [System.IO.File]::WriteAllText($iniPath, $iniText, (New-Object System.Text.UTF8Encoding($false)))
-            & $attribExe +h +s "$iniPath" 2>$null | Out-Null
-            & $attribExe +r +s "$rootClean" 2>$null | Out-Null
+            $iniItem = Get-Item -LiteralPath $iniPath -Force
+            $iniItem.Attributes = $iniItem.Attributes -bor [System.IO.FileAttributes]::Hidden -bor [System.IO.FileAttributes]::System
+            $dirItem = Get-Item -LiteralPath $rootClean -Force
+            $dirItem.Attributes = $dirItem.Attributes -bor [System.IO.FileAttributes]::ReadOnly
         }
     } catch {}
 }
