@@ -47,3 +47,5 @@ modules/
 
 # Локальные правила и кастомизации агента
 .agents/
+
+utils/kotek_folder.ico
