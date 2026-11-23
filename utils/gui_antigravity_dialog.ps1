@@ -48,6 +48,12 @@ function Get-Z2DownloadsDir {
 }
 
 function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4A4') {
+    if (-not (Get-Command Get-Z2AiBypassState -ErrorAction SilentlyContinue) -or -not (Get-Command Get-Z2AiBypassConf -ErrorAction SilentlyContinue)) {
+        $aiHelperPath = Join-Path $Root 'utils\ai_bypass_helper.ps1'
+        if (Test-Path -LiteralPath $aiHelperPath) {
+            try { . $aiHelperPath -Root $Root } catch {}
+        }
+    }
     $accent = if ($AccentHex -match '^#[0-9A-Fa-f]{6}$') { $AccentHex } else { '#7BC4A4' }
     $accentFg = '#121316'
     try {
@@ -515,7 +521,9 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
             if (-not ($svcs -contains 'antigravity')) { $svcs.Add('antigravity') }
             $svcStr = ($svcs -join ',')
             $modeArg = if ($cfg.Mode) { $cfg.Mode } else { 'auto' }
-            $job = Start-Z2AgAsyncCmd $aiP "enable -Provider '$modeArg' -Services '$svcStr'"
+            $escMode = ([string]$modeArg).Replace("'", "''")
+            $escSvc  = ([string]$svcStr).Replace("'", "''")
+            $job = Start-Z2AgAsyncCmd $aiP "enable -Provider '$escMode' -Services '$escSvc'"
             $state.JobProc    = $job.Proc
             $state.JobOutFile = $job.OutFile
             $state.JobKind    = 'step1'

@@ -45,6 +45,7 @@ $script:Z2AiCatalog = @(
         ProbeHost = 'claude.ai'
         Domains   = @(
             '.claude.ai',
+            '.claude.com',
             '.anthropic.com',
             '.claudeusercontent.com'
         )
@@ -192,6 +193,17 @@ function Get-Z2AiSelectionInfo([string]$RootPath = '', [string]$RawServices = ''
     })
 }
 
+function Test-Z2PublicIpv4([string]$IpStr) {
+    if ([string]::IsNullOrWhiteSpace($IpStr)) { return $false }
+    $t = $IpStr.Trim()
+    if ($t -notmatch '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$') { return $false }
+    $pIp = $null
+    if (-not [System.Net.IPAddress]::TryParse($t, [ref]$pIp)) { return $false }
+    if ($pIp.AddressFamily -ne [System.Net.Sockets.AddressFamily]::InterNetwork) { return $false }
+    if ($t -match '^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)') { return $false }
+    return $true
+}
+
 function Get-Z2AiDnsPool([string]$RootPath = '') {
     if (-not $RootPath) { $RootPath = $Root }
     $pool = New-Object System.Collections.Generic.List[object]
@@ -203,7 +215,7 @@ function Get-Z2AiDnsPool([string]$RootPath = '') {
             $parts = $t -split '\|', 2
             if ($parts.Count -eq 2) {
                 $name = $parts[0].Trim()
-                $ips  = @($parts[1] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $pIp = $null; [System.Net.IPAddress]::TryParse($_, [ref]$pIp) -and $pIp.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and $_ -notmatch '^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)' })
+                $ips  = @($parts[1] -split ',' | ForEach-Object { $_.Trim() } | Where-Object { Test-Z2PublicIpv4 $_ })
                 if ($name -and $ips.Count -gt 0) {
                     $pool.Add((New-Object PSObject -Property @{ Name = [string]$name; Ips = [string[]]@($ips) }))
                 }
@@ -212,9 +224,8 @@ function Get-Z2AiDnsPool([string]$RootPath = '') {
     }
     if ($pool.Count -eq 0) {
         $pool.Add((New-Object PSObject -Property @{ Name = 'Pereval';    Ips = @('153.80.200.170') }))
-        $pool.Add((New-Object PSObject -Property @{ Name = 'GeoHide EU'; Ips = @('37.230.192.51', '159.194.200.33') }))
+        $pool.Add((New-Object PSObject -Property @{ Name = 'GeoHide EU'; Ips = @('37.230.192.51') }))
         $pool.Add((New-Object PSObject -Property @{ Name = 'Malw.link';  Ips = @('179.254.166.171', '164.5.224.81') }))
-        $pool.Add((New-Object PSObject -Property @{ Name = 'MagicDNS';   Ips = @('217.144.190.216', '109.120.187.249') }))
     }
     return $pool
 }
@@ -382,28 +393,94 @@ function Get-Z2AiBypassState([string]$RootPath = '') {
     if (-not $RootPath) { $RootPath = $Root }
     $rules = @(Get-Z2AiNrptRegistryRules)
     $cfg = Get-Z2AiBypassConf $RootPath
-    $sel = Get-Z2AiSelectionInfo $RootPath $cfg.Services
-    $ips = @()
+    $ipList  = New-Object System.Collections.Generic.List[string]
+    $seenIp  = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
     $domList = New-Object System.Collections.Generic.List[string]
+    $seenDom = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
     if ($rules.Count -gt 0) {
-        if ($rules[0].NameServers) { $ips = @($rules[0].NameServers) }
         foreach ($r in $rules) {
+            foreach ($ns in @($r.NameServers)) {
+                $nsT = ([string]$ns).Trim()
+                if ($nsT -and $seenIp.Add($nsT)) { $ipList.Add($nsT) }
+            }
             foreach ($d in @($r.Domains)) {
-                if ($d -and -not $domList.Contains($d)) { $domList.Add($d) }
+                $dT = ([string]$d).Trim()
+                if ($dT -and $seenDom.Add($dT)) { $domList.Add($dT) }
             }
         }
     }
+    $ips = $ipList.ToArray()
+
+    $svcIds = @()
+    $svcLabel = ''
+    $customCount = 0
+    $activeName = ''
+
+    if ($rules.Count -gt 0) {
+        $activeDomSet = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($d in $domList) {
+            $normD = '.' + $d.Trim().TrimStart('.').ToLowerInvariant()
+            [void]$activeDomSet.Add($normD)
+        }
+        $matchedSvcIds = New-Object System.Collections.Generic.List[string]
+        $matchedNames  = New-Object System.Collections.Generic.List[string]
+        $allCatDomSet  = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+        foreach ($item in $script:Z2AiCatalog) {
+            $itemMatched = $false
+            foreach ($cd in @($item.Domains)) {
+                $normCd = '.' + ([string]$cd).Trim().TrimStart('.').ToLowerInvariant()
+                [void]$allCatDomSet.Add($normCd)
+                if ($activeDomSet.Contains($normCd)) { $itemMatched = $true }
+            }
+            if ($itemMatched) {
+                $matchedSvcIds.Add([string]$item.Id)
+                $matchedNames.Add([string]$item.Name)
+            }
+        }
+        foreach ($ad in $activeDomSet) {
+            if (-not $allCatDomSet.Contains($ad)) { $customCount++ }
+        }
+        if ($customCount -gt 0) {
+            $matchedNames.Add("Свои ($customCount)")
+        }
+        $svcIds = $matchedSvcIds.ToArray()
+        $svcLabel = if ($matchedNames.Count -gt 0) { $matchedNames -join ', ' } else { 'не выбрано' }
+
+        $pool = Get-Z2AiDnsPool $RootPath
+        $matchedNodeName = ''
+        if ($ips.Count -gt 0) {
+            foreach ($p in $pool) {
+                if ($p.Ips -contains $ips[0]) { $matchedNodeName = [string]$p.Name; break }
+            }
+        }
+        if ($cfg.ActiveName -and $ips.Count -gt 0 -and (@($cfg.ActiveIps -split ',\s*') -contains $ips[0])) {
+            $activeName = $cfg.ActiveName
+        } elseif ($matchedNodeName) {
+            $activeName = $matchedNodeName
+        } elseif ($cfg.ActiveName) {
+            $activeName = $cfg.ActiveName
+        } elseif ($ips.Count -gt 0) {
+            $activeName = $ips[0]
+        }
+    } else {
+        $sel = Get-Z2AiSelectionInfo $RootPath $cfg.Services
+        $svcIds = @($sel.ServiceIds)
+        $svcLabel = [string]$sel.Label
+        $customCount = $sel.CustomDomains.Count
+        $activeName = $cfg.ActiveName
+    }
+
     return (New-Object PSObject -Property @{
         Active        = ($rules.Count -gt 0)
         RuleCount     = $rules.Count
         Domains       = [string[]]$domList.ToArray()
         IpsList       = [string[]]@($ips)
         Mode          = $cfg.Mode
-        ActiveName    = if ($cfg.ActiveName) { $cfg.ActiveName } elseif ($ips.Count -gt 0) { $ips[0] } else { '' }
+        ActiveName    = $activeName
         ActiveIps     = if ($ips.Count -gt 0) { ($ips -join ', ') } else { $cfg.ActiveIps }
-        Services      = [string[]]@($sel.ServiceIds)
-        ServicesLabel = [string]$sel.Label
-        CustomCount   = $sel.CustomDomains.Count
+        Services      = [string[]]@($svcIds)
+        ServicesLabel = [string]$svcLabel
+        CustomCount   = $customCount
     })
 }
 
@@ -411,6 +488,9 @@ function Resolve-Z2DnsRawUdp([string]$HostName, [string]$DnsIp, [int]$TimeoutMs 
     $ips = New-Object System.Collections.Generic.List[string]
     $udp = $null
     try {
+        if ($TimeoutMs -lt 100) { $TimeoutMs = 100 }
+        $targetIp = [System.Net.IPAddress]::Parse($DnsIp.Trim())
+        $targetIpStr = $targetIp.ToString()
         $txId = Get-Random -Minimum 1000 -Maximum 65000
         $pkt = New-Object System.Collections.Generic.List[byte]
         # DNS header: ID(2), Flags=0x0100(RD), QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=0
@@ -421,6 +501,7 @@ function Resolve-Z2DnsRawUdp([string]$HostName, [string]$DnsIp, [int]$TimeoutMs 
         $pkt.Add(0x00); $pkt.Add(0x00)
         $pkt.Add(0x00); $pkt.Add(0x00)
         foreach ($lbl in ($HostName.Trim('.').Split('.'))) {
+            if (-not $lbl) { continue }
             $lb = [System.Text.Encoding]::ASCII.GetBytes($lbl)
             $pkt.Add([byte]$lb.Length)
             foreach ($b in $lb) { $pkt.Add($b) }
@@ -430,15 +511,33 @@ function Resolve-Z2DnsRawUdp([string]$HostName, [string]$DnsIp, [int]$TimeoutMs 
         $pkt.Add(0x00); $pkt.Add(0x01) # QCLASS = IN
 
         $udp = New-Object System.Net.Sockets.UdpClient
-        $udp.Client.SendTimeout    = $TimeoutMs
-        $udp.Client.ReceiveTimeout = $TimeoutMs
-        $ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($DnsIp), 53)
+        $udp.Client.SendTimeout = $TimeoutMs
+        $ep = New-Object System.Net.IPEndPoint($targetIp, 53)
         $qBytes = $pkt.ToArray()
         [void]$udp.Send($qBytes, $qBytes.Length, $ep)
-        $remEp = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
-        $resp = $udp.Receive([ref]$remEp)
-        if ($null -eq $resp -or $resp.Length -lt 12) { return @() }
-        if (((([int]$resp[0] -shl 8) -bor [int]$resp[1]) -ne $txId)) { return @() }
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $resp = $null
+        while ($true) {
+            $remMs = $TimeoutMs - [int]$sw.ElapsedMilliseconds
+            if ($remMs -le 0) { break }
+            $udp.Client.ReceiveTimeout = $remMs
+            $remEp = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+            $pktIn = $null
+            try {
+                $pktIn = $udp.Receive([ref]$remEp)
+            } catch {
+                break
+            }
+            if ($null -eq $pktIn -or $pktIn.Length -lt 12) { continue }
+            if ($null -eq $remEp -or $remEp.Address.ToString() -ne $targetIpStr) { continue }
+            if (((([int]$pktIn[0] -shl 8) -bor [int]$pktIn[1]) -ne $txId)) { continue }
+            if (([int]$pktIn[2] -band 0x80) -eq 0) { continue }
+            if (([int]$pktIn[3] -band 0x0F) -ne 0) { break }
+            $resp = $pktIn
+            break
+        }
+        if ($null -eq $resp) { return @() }
 
         $qdCount = ([int]$resp[4] -shl 8) -bor [int]$resp[5]
         $anCount = ([int]$resp[6] -shl 8) -bor [int]$resp[7]
@@ -514,6 +613,8 @@ function Test-Z2AiSmartDns([string]$DnsIp, [string]$TestHost = 'gemini.google.co
 
     $probeUrl = if ($TestHost -ieq 'gemini.google.com') { 'https://gemini.google.com/app' } else { "https://$TestHost" }
     $okCodeRx = if ($TestHost -match '(?i)googleapis\.com$') { '^([23]\d\d|401|403|404|405|429)$' } else { '^([23]\d\d|401|403|405|429)$' }
+    $geoBlockRx = '(?i)(app-unavailable-in-region|/unsupported|/not-available|/region|/unavailable)'
+    $googleHostRx = '(?i)(^|\.)(google|googleapis)\.com$'
     $lastReason = ''
     $maxTry = [Math]::Min($validIps.Count, 3)
 
@@ -526,8 +627,12 @@ function Test-Z2AiSmartDns([string]$DnsIp, [string]$TestHost = 'gemini.google.co
         $redirUrl = if ($pParts.Count -ge 2) { $pParts[1].Trim() } else { '' }
         $res.HttpCode = $httpCode
 
-        if ($redirUrl -match '(?i)/sorry\b' -or ($httpCode -eq '429' -and $TestHost -match '(?i)google\.com$')) {
-            $lastReason = "Google антибот (/sorry) на $candIp — переключаюсь на другой узел"
+        if ($redirUrl -match '(?i)/sorry\b' -or ($httpCode -eq '429' -and $TestHost -match $googleHostRx)) {
+            $lastReason = "Google антибот ($httpCode) на $candIp — переключаюсь на другой узел"
+            continue
+        }
+        if ($redirUrl -match $geoBlockRx) {
+            $lastReason = "Геоблок (HTTP $httpCode -> $redirUrl) на $candIp — узел не обходит регион"
             continue
         }
         if ($httpCode -match $okCodeRx) {
@@ -570,13 +675,53 @@ function Disable-Z2AiBypass([string]$RootPath = '') {
     return $removed
 }
 
-function Enable-Z2AiBypass([string]$RootPath = '', [string]$SelectedMode = '', [string]$Services = '') {
+function Get-Z2AiProbePlan($SelInfo) {
+    $proxiedIds = @('gemini', 'chatgpt', 'claude', 'copilot', 'grok', 'antigravity')
+    $proxiedHost = ''
+    foreach ($ph in @($SelInfo.ProbeHosts)) {
+        if ($proxiedIds -contains ([string]$ph.Id)) {
+            $proxiedHost = [string]$ph.Host
+            break
+        }
+    }
+    if ($proxiedHost) {
+        return [PSCustomObject]@{
+            PrimaryHost      = $proxiedHost
+            HasProxiedSelect = $true
+        }
+    }
+    $fbHost = 'gemini.google.com'
+    if ($SelInfo.ProbeHosts.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$SelInfo.ProbeHosts[0].Host)) {
+        $fbHost = [string]$SelInfo.ProbeHosts[0].Host
+    }
+    return [PSCustomObject]@{
+        PrimaryHost      = $fbHost
+        HasProxiedSelect = $false
+    }
+}
+
+function Enable-Z2AiBypass(
+    [string]$RootPath = '',
+    [string]$SelectedMode = '',
+    [string]$Services = '',
+    [bool]$ServicesSpecified = $false,
+    [bool]$PreserveMode = $false
+) {
     if (-not $RootPath) { $RootPath = $Root }
     $cfg = Get-Z2AiBypassConf $RootPath
-    if (-not [string]::IsNullOrWhiteSpace($SelectedMode)) { $cfg.Mode = $SelectedMode }
-    if (-not [string]::IsNullOrWhiteSpace($Services)) {
-        $resolvedSvc = @(Resolve-Z2AiServiceIds $Services)
-        $cfg.Services = ($resolvedSvc -join ',')
+    $searchMode = $cfg.Mode
+    if (-not [string]::IsNullOrWhiteSpace($SelectedMode)) {
+        $searchMode = $SelectedMode
+        if (-not $PreserveMode) { $cfg.Mode = $SelectedMode }
+    }
+    $hasSvcParam = $ServicesSpecified -or ($PSBoundParameters.ContainsKey('Services') -and -not $PSBoundParameters.ContainsKey('ServicesSpecified'))
+    if ($hasSvcParam) {
+        if ([string]::IsNullOrWhiteSpace($Services)) {
+            $cfg.Services = ''
+        } else {
+            $resolvedSvc = @(Resolve-Z2AiServiceIds $Services)
+            $cfg.Services = ($resolvedSvc -join ',')
+        }
     }
 
     $sel = Get-Z2AiSelectionInfo $RootPath $cfg.Services
@@ -589,17 +734,27 @@ function Enable-Z2AiBypass([string]$RootPath = '', [string]$SelectedMode = '', [
         Write-Host ("  [!] Обнаружен активный VPN/прокси ({0}): при одновременной работе со SmartDNS возможен двойной прокси и тормоза." -f $vpnCheck.Label) -ForegroundColor DarkYellow
     }
 
-    $primaryProbeHost = 'gemini.google.com'
-    if ($sel.ProbeHosts.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace([string]$sel.ProbeHosts[0].Host)) { $primaryProbeHost = [string]$sel.ProbeHosts[0].Host }
+    $probePlan = Get-Z2AiProbePlan $sel
+    $primaryProbeHost = $probePlan.PrimaryHost
+    $needProxyVerify  = (-not $probePlan.HasProxiedSelect)
     $pool = Get-Z2AiDnsPool $RootPath
 
     $candidates = New-Object System.Collections.Generic.List[object]
-    if ($cfg.Mode -ieq 'auto' -or [string]::IsNullOrWhiteSpace($cfg.Mode)) {
+    if ($searchMode -ieq 'auto' -or [string]::IsNullOrWhiteSpace($searchMode)) {
         foreach ($p in $pool) { $candidates.Add($p) }
+    } elseif ($searchMode -ieq 'custom') {
+        $custIps = @($cfg.CustomDns -split '[,;\s]+' | ForEach-Object { $_.Trim() } | Where-Object { Test-Z2PublicIpv4 $_ })
+        if ($custIps.Count -gt 0) {
+            $candidates.Add([PSCustomObject]@{ Name = "Свой ($($custIps[0]))"; Ips = [string[]]$custIps })
+        }
+        if ($candidates.Count -eq 0) {
+            foreach ($p in $pool) { $candidates.Add($p) }
+        }
     } else {
-        foreach ($p in $pool) { if ($p.Name -ieq $cfg.Mode) { $candidates.Add($p) } }
-        $pCust = $null; if ($candidates.Count -eq 0 -and [System.Net.IPAddress]::TryParse($cfg.Mode, [ref]$pCust) -and $pCust.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork -and $cfg.Mode -notmatch '^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)') {
-            $candidates.Add([PSCustomObject]@{ Name = "Свой ($($cfg.Mode))"; Ips = @($cfg.Mode) })
+        foreach ($p in $pool) { if ($p.Name -ieq $searchMode) { $candidates.Add($p) } }
+        if ($candidates.Count -eq 0 -and (Test-Z2PublicIpv4 $searchMode)) {
+            $ipClean = $searchMode.Trim()
+            $candidates.Add([PSCustomObject]@{ Name = "Свой ($ipClean)"; Ips = @($ipClean) })
         }
         if ($candidates.Count -eq 0) {
             foreach ($p in $pool) { $candidates.Add($p) }
@@ -612,11 +767,27 @@ function Enable-Z2AiBypass([string]$RootPath = '', [string]$SelectedMode = '', [
         $liveIps = New-Object System.Collections.Generic.List[string]
         foreach ($ip in $cand.Ips) {
             $t = Test-Z2AiSmartDns $ip $primaryProbeHost
-            if ($t.Ok) {
+            if (-not $t.Ok) {
+                Write-Host ("      [!] {0} -> {1}" -f $ip, $t.Reason) -ForegroundColor DarkYellow
+                continue
+            }
+            if ($needProxyVerify) {
+                $tp1 = Test-Z2AiSmartDns $ip 'gemini.google.com'
+                if ($tp1.Ok) {
+                    $liveIps.Add($ip)
+                    Write-Host ("      [OK] {0} -> {1} (прокси gemini.google.com: {2})" -f $ip, $t.Reason, $tp1.Reason) -ForegroundColor Green
+                } else {
+                    $tp2 = Test-Z2AiSmartDns $ip 'chatgpt.com'
+                    if ($tp2.Ok) {
+                        $liveIps.Add($ip)
+                        Write-Host ("      [OK] {0} -> {1} (прокси chatgpt.com: {2})" -f $ip, $t.Reason, $tp2.Reason) -ForegroundColor Green
+                    } else {
+                        Write-Host ("      [!] {0} -> {1}, но прокси ИИ не работает (gemini: {2}; chatgpt: {3})" -f $ip, $t.Reason, $tp1.Reason, $tp2.Reason) -ForegroundColor DarkYellow
+                    }
+                }
+            } else {
                 $liveIps.Add($ip)
                 Write-Host ("      [OK] {0} -> {1}" -f $ip, $t.Reason) -ForegroundColor Green
-            } else {
-                Write-Host ("      [!] {0} -> {1}" -f $ip, $t.Reason) -ForegroundColor DarkYellow
             }
         }
         if ($liveIps.Count -gt 0) {
@@ -658,8 +829,13 @@ function Enable-Z2AiBypass([string]$RootPath = '', [string]$SelectedMode = '', [
 }
 
 if ($MyInvocation.InvocationName -ne '.') {
+    $svcSpecified = $PSBoundParameters.ContainsKey('Services')
     if ($Action -eq 'enable') {
-        $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode $Provider -Services $Services
+        if ($svcSpecified) {
+            $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode $Provider -Services $Services -ServicesSpecified $true
+        } else {
+            $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode $Provider -ServicesSpecified $false
+        }
         if ($ok) { exit 0 } else { exit 1 }
     } elseif ($Action -eq 'disable') {
         [void](Disable-Z2AiBypass $Root)
@@ -669,40 +845,59 @@ if ($MyInvocation.InvocationName -ne '.') {
         $st = Get-Z2AiBypassState $Root
         if (-not $st.Active) {
             Write-Host '  [!] Обход ИИ выключен — запускаю подбор живого SmartDNS...' -ForegroundColor Yellow
-            $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode 'auto' -Services $Services
+            if ($svcSpecified) {
+                $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode 'auto' -Services $Services -ServicesSpecified $true -PreserveMode $true
+            } else {
+                $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode 'auto' -ServicesSpecified $false -PreserveMode $true
+            }
             if ($ok) { exit 0 } else { exit 1 }
         }
         $cfg = Get-Z2AiBypassConf $Root
-        $svcRaw = if ($Services) { $Services } else { $cfg.Services }
+        $svcRaw = if ($svcSpecified) { $Services } elseif ($st.Services.Count -gt 0 -or $st.CustomCount -gt 0) { ($st.Services -join ',') } else { $cfg.Services }
         $sel = Get-Z2AiSelectionInfo $Root $svcRaw
         if ($sel.Domains.Count -eq 0) {
             Write-Host '  [!] Не выбран ни один ИИ-сервис.' -ForegroundColor Yellow
             exit 1
         }
+        $probePlan = Get-Z2AiProbePlan $sel
+        $proxiedIds = @('gemini', 'chatgpt', 'claude', 'copilot', 'grok', 'antigravity')
         $activeIpList = @($st.ActiveIps -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
         foreach ($curIp in $activeIpList) {
             Write-Host ("  [*] Проверка активного SmartDNS {0} ({1})..." -f $st.ActiveName, $curIp) -ForegroundColor Yellow
             $okCount = 0
-            $primaryOk = $false
+            $proxiedOk = $false
+            $firstOk = $false
             $idxP = 0
             foreach ($ph in $sel.ProbeHosts) {
                 $t = Test-Z2AiSmartDns $curIp $ph.Host
                 if ($t.Ok) {
                     $okCount++
-                    if ($idxP -eq 0) { $primaryOk = $true }
+                    if ($idxP -eq 0) { $firstOk = $true }
+                    if ($proxiedIds -contains ([string]$ph.Id)) { $proxiedOk = $true }
                     Write-Host ("      [OK] {0} ({1}) -> {2}" -f $ph.Name, $ph.Host, $t.Reason) -ForegroundColor Green
                 } else {
                     Write-Host ("      [!] {0} ({1}) -> {2}" -f $ph.Name, $ph.Host, $t.Reason) -ForegroundColor DarkYellow
                 }
                 $idxP++
             }
-            if ($okCount -gt 0 -and $primaryOk) {
+            $nodeLive = if ($probePlan.HasProxiedSelect) {
+                $proxiedOk
+            } elseif ($okCount -gt 0 -and $firstOk) {
+                ((Test-Z2AiSmartDns $curIp 'gemini.google.com').Ok -or (Test-Z2AiSmartDns $curIp 'chatgpt.com').Ok)
+            } else {
+                $false
+            }
+            if ($nodeLive) {
                 Write-Host ("  [OK] Обход ИИ работает через {0} ({1}): доступно {2}/{3} сервисов." -f $st.ActiveName, $curIp, $okCount, $sel.ProbeHosts.Count) -ForegroundColor Green
                 exit 0
             }
         }
         Write-Host ("  [!] Активный узел {0} ({1}) не отвечает — пробую переключиться на запасной из пула..." -f $st.ActiveName, ($activeIpList -join ', ')) -ForegroundColor Yellow
-        $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode 'auto' -Services $Services
+        if ($svcSpecified) {
+            $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode 'auto' -Services $Services -ServicesSpecified $true -PreserveMode $true
+        } else {
+            $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode 'auto' -ServicesSpecified $false -PreserveMode $true
+        }
         if ($ok) { exit 0 } else { exit 1 }
     } else {
         $st = Get-Z2AiBypassState $Root
