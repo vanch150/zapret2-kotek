@@ -89,7 +89,7 @@ $script:Z2AiCatalog = @(
     [PSCustomObject]@{
         Id        = 'antigravity'
         Name      = 'Google Antigravity'
-        ProbeHost = 'antigravity.google'
+        ProbeHost = 'daily-cloudcode-pa.googleapis.com'
         Domains   = @(
             '.antigravity.google',
             '.antigravity.google.com',
@@ -211,10 +211,10 @@ function Get-Z2AiDnsPool([string]$RootPath = '') {
         }
     }
     if ($pool.Count -eq 0) {
-        $pool.Add((New-Object PSObject -Property @{ Name = 'MagicDNS';   Ips = @('217.144.190.216', '109.120.187.249') }))
-        $pool.Add((New-Object PSObject -Property @{ Name = 'GeoHide EU'; Ips = @('5.175.161.40', '143.20.64.192') }))
         $pool.Add((New-Object PSObject -Property @{ Name = 'Pereval';    Ips = @('153.80.200.170') }))
+        $pool.Add((New-Object PSObject -Property @{ Name = 'GeoHide EU'; Ips = @('37.230.192.51', '159.194.200.33') }))
         $pool.Add((New-Object PSObject -Property @{ Name = 'Malw.link';  Ips = @('179.254.166.171', '164.5.224.81') }))
+        $pool.Add((New-Object PSObject -Property @{ Name = 'MagicDNS';   Ips = @('217.144.190.216', '109.120.187.249') }))
     }
     return $pool
 }
@@ -407,47 +407,137 @@ function Get-Z2AiBypassState([string]$RootPath = '') {
     })
 }
 
+function Resolve-Z2DnsRawUdp([string]$HostName, [string]$DnsIp, [int]$TimeoutMs = 2200) {
+    $ips = New-Object System.Collections.Generic.List[string]
+    $udp = $null
+    try {
+        $txId = Get-Random -Minimum 1000 -Maximum 65000
+        $pkt = New-Object System.Collections.Generic.List[byte]
+        # DNS header: ID(2), Flags=0x0100(RD), QDCOUNT=1, ANCOUNT=0, NSCOUNT=0, ARCOUNT=0
+        $pkt.Add([byte](($txId -shr 8) -band 0xFF)); $pkt.Add([byte]($txId -band 0xFF))
+        $pkt.Add(0x01); $pkt.Add(0x00)
+        $pkt.Add(0x00); $pkt.Add(0x01)
+        $pkt.Add(0x00); $pkt.Add(0x00)
+        $pkt.Add(0x00); $pkt.Add(0x00)
+        $pkt.Add(0x00); $pkt.Add(0x00)
+        foreach ($lbl in ($HostName.Trim('.').Split('.'))) {
+            $lb = [System.Text.Encoding]::ASCII.GetBytes($lbl)
+            $pkt.Add([byte]$lb.Length)
+            foreach ($b in $lb) { $pkt.Add($b) }
+        }
+        $pkt.Add(0x00)
+        $pkt.Add(0x00); $pkt.Add(0x01) # QTYPE = A
+        $pkt.Add(0x00); $pkt.Add(0x01) # QCLASS = IN
+
+        $udp = New-Object System.Net.Sockets.UdpClient
+        $udp.Client.SendTimeout    = $TimeoutMs
+        $udp.Client.ReceiveTimeout = $TimeoutMs
+        $ep = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Parse($DnsIp), 53)
+        $qBytes = $pkt.ToArray()
+        [void]$udp.Send($qBytes, $qBytes.Length, $ep)
+        $remEp = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+        $resp = $udp.Receive([ref]$remEp)
+        if ($null -eq $resp -or $resp.Length -lt 12) { return @() }
+        if (((([int]$resp[0] -shl 8) -bor [int]$resp[1]) -ne $txId)) { return @() }
+
+        $qdCount = ([int]$resp[4] -shl 8) -bor [int]$resp[5]
+        $anCount = ([int]$resp[6] -shl 8) -bor [int]$resp[7]
+        $pos = 12
+
+        # Skip Question section
+        for ($q = 0; $q -lt $qdCount -and $pos -lt $resp.Length; $q++) {
+            while ($pos -lt $resp.Length) {
+                $len = [int]$resp[$pos]
+                if ($len -eq 0) { $pos++; break }
+                if (($len -band 0xC0) -eq 0xC0) { $pos += 2; break }
+                $pos += (1 + $len)
+            }
+            $pos += 4 # QTYPE + QCLASS
+        }
+
+        # Parse Answer section for A records (Type=1, Class=1, RDLength=4)
+        for ($a = 0; $a -lt $anCount -and ($pos + 12) -le $resp.Length; $a++) {
+            if (($resp[$pos] -band 0xC0) -eq 0xC0) {
+                $pos += 2
+            } else {
+                while ($pos -lt $resp.Length) {
+                    $len = [int]$resp[$pos]
+                    if ($len -eq 0) { $pos++; break }
+                    if (($len -band 0xC0) -eq 0xC0) { $pos += 2; break }
+                    $pos += (1 + $len)
+                }
+            }
+            if (($pos + 10) -gt $resp.Length) { break }
+            $rType  = ([int]$resp[$pos] -shl 8) -bor [int]$resp[$pos + 1]
+            $rClass = ([int]$resp[$pos + 2] -shl 8) -bor [int]$resp[$pos + 3]
+            $rdLen  = ([int]$resp[$pos + 8] -shl 8) -bor [int]$resp[$pos + 9]
+            $pos += 10
+            if ($rType -eq 1 -and $rClass -eq 1 -and $rdLen -eq 4 -and ($pos + 4) -le $resp.Length) {
+                $ipStr = "$($resp[$pos]).$($resp[$pos + 1]).$($resp[$pos + 2]).$($resp[$pos + 3])"
+                if (-not ($ips -contains $ipStr)) { $ips.Add($ipStr) }
+            }
+            $pos += $rdLen
+        }
+    } catch {} finally {
+        if ($null -ne $udp) { try { $udp.Close() } catch {}; try { $udp.Dispose() } catch {} }
+    }
+    return $ips.ToArray()
+}
+
 function Test-Z2AiSmartDns([string]$DnsIp, [string]$TestHost = 'gemini.google.com') {
     if ([string]::IsNullOrWhiteSpace($TestHost)) { $TestHost = 'gemini.google.com' }
     $TestHost = $TestHost.Trim().TrimStart('.')
     $res = [PSCustomObject]@{ Ok = $false; ResolvedIp = ''; HttpCode = '000'; Reason = ''; Host = $TestHost }
-    $resolvedIp = ''
-    try {
-        $ans = @(Resolve-DnsName -Name $TestHost -Type A -Server $DnsIp -DnsOnly -QuickTimeout -ErrorAction Stop | Where-Object { $_.IPAddress })
-        if ($ans.Count -gt 0) { $resolvedIp = [string]$ans[0].IPAddress }
-    } catch {}
-    if (-not $resolvedIp) {
+    $bogonRx = '^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)'
+
+    # Direct UDP/53 query bypasses active Windows NRPT rules so switching away from a dead node always works
+    $resolvedIps = @(Resolve-Z2DnsRawUdp -HostName $TestHost -DnsIp $DnsIp -TimeoutMs 2200)
+    if ($resolvedIps.Count -eq 0) {
         $res.Reason = 'DNS не ответил'
         return $res
     }
-    if ($resolvedIp -match '^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)') {
-        $res.ResolvedIp = $resolvedIp
-        $res.Reason = "Заглушка ($resolvedIp)"
+
+    $validIps = @($resolvedIps | Where-Object { $_ -notmatch $bogonRx })
+    if ($validIps.Count -eq 0) {
+        $res.ResolvedIp = $resolvedIps[0]
+        $res.Reason = "Заглушка ($($resolvedIps[0]))"
         return $res
     }
-    $res.ResolvedIp = $resolvedIp
+
     $curlExe = "$env:SystemRoot\System32\curl.exe"
-    if (Test-Path -LiteralPath $curlExe) {
-        $probeUrl = if ($TestHost -ieq 'gemini.google.com') { 'https://gemini.google.com/app' } else { "https://$TestHost" }
-        $rawProbe = [string](& $curlExe -4 -s -o NUL -w '%{http_code}|%{redirect_url}' --max-time 4 --resolve "${TestHost}:443:$resolvedIp" $probeUrl 2>$null)
-        $pParts = $rawProbe.Trim() -split '\|', 2
-        if ($pParts.Count -ge 1 -and $pParts[0]) { $res.HttpCode = $pParts[0].Trim() }
-        $redirUrl = if ($pParts.Count -ge 2) { $pParts[1].Trim() } else { '' }
-        if ($redirUrl -match '(?i)/sorry\b' -or ($res.HttpCode -eq '429' -and $TestHost -match '(?i)google\.com$')) {
-            $res.Ok = $false
-            $res.Reason = "Google антибот (/sorry) на $resolvedIp — переключаюсь на другой узел"
-            return $res
-        }
-        if ($res.HttpCode -match '^([23]\d\d|401|403|405|429)$') {
-            $res.Ok = $true
-            $res.Reason = "HTTP $($res.HttpCode) через $resolvedIp"
-            return $res
-        }
-        $res.Reason = "Прокси $resolvedIp не ответил (HTTP $($res.HttpCode))"
+    if (-not (Test-Path -LiteralPath $curlExe)) {
+        $res.Ok = $true
+        $res.ResolvedIp = $validIps[0]
+        $res.Reason = "DNS -> $($validIps[0])"
         return $res
     }
-    $res.Ok = $true
-    $res.Reason = "DNS -> $resolvedIp"
+
+    $probeUrl = if ($TestHost -ieq 'gemini.google.com') { 'https://gemini.google.com/app' } else { "https://$TestHost" }
+    $okCodeRx = if ($TestHost -match '(?i)googleapis\.com$') { '^([23]\d\d|401|403|404|405|429)$' } else { '^([23]\d\d|401|403|405|429)$' }
+    $lastReason = ''
+    $maxTry = [Math]::Min($validIps.Count, 3)
+
+    for ($k = 0; $k -lt $maxTry; $k++) {
+        $candIp = $validIps[$k]
+        $res.ResolvedIp = $candIp
+        $rawProbe = [string](& $curlExe --noproxy '*' -4 -s -o NUL -w '%{http_code}|%{redirect_url}' --max-time 4 --resolve "${TestHost}:443:$candIp" $probeUrl 2>$null)
+        $pParts = $rawProbe.Trim() -split '\|', 2
+        $httpCode = if ($pParts.Count -ge 1 -and $pParts[0]) { $pParts[0].Trim() } else { '000' }
+        $redirUrl = if ($pParts.Count -ge 2) { $pParts[1].Trim() } else { '' }
+        $res.HttpCode = $httpCode
+
+        if ($redirUrl -match '(?i)/sorry\b' -or ($httpCode -eq '429' -and $TestHost -match '(?i)google\.com$')) {
+            $lastReason = "Google антибот (/sorry) на $candIp — переключаюсь на другой узел"
+            continue
+        }
+        if ($httpCode -match $okCodeRx) {
+            $res.Ok = $true
+            $res.Reason = "HTTP $httpCode через $candIp"
+            return $res
+        }
+        $lastReason = "Прокси $candIp не ответил (HTTP $httpCode)"
+    }
+    $res.Reason = $lastReason
     return $res
 }
 
@@ -589,27 +679,29 @@ if ($MyInvocation.InvocationName -ne '.') {
             Write-Host '  [!] Не выбран ни один ИИ-сервис.' -ForegroundColor Yellow
             exit 1
         }
-        $firstIp = ($st.ActiveIps -split ',')[0].Trim()
-        Write-Host ("  [*] Проверка активного SmartDNS {0} ({1})..." -f $st.ActiveName, $firstIp) -ForegroundColor Yellow
-        $okCount = 0
-        $primaryOk = $false
-        $idxP = 0
-        foreach ($ph in $sel.ProbeHosts) {
-            $t = Test-Z2AiSmartDns $firstIp $ph.Host
-            if ($t.Ok) {
-                $okCount++
-                if ($idxP -eq 0) { $primaryOk = $true }
-                Write-Host ("      [OK] {0} ({1}) -> {2}" -f $ph.Name, $ph.Host, $t.Reason) -ForegroundColor Green
-            } else {
-                Write-Host ("      [!] {0} ({1}) -> {2}" -f $ph.Name, $ph.Host, $t.Reason) -ForegroundColor DarkYellow
+        $activeIpList = @($st.ActiveIps -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne '' })
+        foreach ($curIp in $activeIpList) {
+            Write-Host ("  [*] Проверка активного SmartDNS {0} ({1})..." -f $st.ActiveName, $curIp) -ForegroundColor Yellow
+            $okCount = 0
+            $primaryOk = $false
+            $idxP = 0
+            foreach ($ph in $sel.ProbeHosts) {
+                $t = Test-Z2AiSmartDns $curIp $ph.Host
+                if ($t.Ok) {
+                    $okCount++
+                    if ($idxP -eq 0) { $primaryOk = $true }
+                    Write-Host ("      [OK] {0} ({1}) -> {2}" -f $ph.Name, $ph.Host, $t.Reason) -ForegroundColor Green
+                } else {
+                    Write-Host ("      [!] {0} ({1}) -> {2}" -f $ph.Name, $ph.Host, $t.Reason) -ForegroundColor DarkYellow
+                }
+                $idxP++
             }
-            $idxP++
+            if ($okCount -gt 0 -and $primaryOk) {
+                Write-Host ("  [OK] Обход ИИ работает через {0} ({1}): доступно {2}/{3} сервисов." -f $st.ActiveName, $curIp, $okCount, $sel.ProbeHosts.Count) -ForegroundColor Green
+                exit 0
+            }
         }
-        if ($okCount -gt 0 -and $primaryOk) {
-            Write-Host ("  [OK] Обход ИИ работает через {0} ({1}): доступно {2}/{3} сервисов." -f $st.ActiveName, $firstIp, $okCount, $sel.ProbeHosts.Count) -ForegroundColor Green
-            exit 0
-        }
-        Write-Host ("  [!] Базовый узел {0} ({1}) не отвечает — пробую переключиться на запасной из пула..." -f $st.ActiveName, $firstIp) -ForegroundColor Yellow
+        Write-Host ("  [!] Активный узел {0} ({1}) не отвечает — пробую переключиться на запасной из пула..." -f $st.ActiveName, ($activeIpList -join ', ')) -ForegroundColor Yellow
         $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode 'auto' -Services $Services
         if ($ok) { exit 0 } else { exit 1 }
     } else {

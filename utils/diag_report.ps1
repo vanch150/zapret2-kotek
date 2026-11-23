@@ -322,8 +322,10 @@ function Invoke-Z2DiagProbe([string]$Url, [int]$MaxSec = 5) {
         $raw = [string](& $curlExe -4 -s -o NUL -w '%{http_code}|%{size_download}|%{speed_download}|%{exitcode}' --max-time $MaxSec $Url 2>$null)
         $p = $raw.Trim() -split '\|'
         if ($p.Count -ge 1 -and $p[0]) { $res.Code = $p[0].Trim() }
-        if ($p.Count -ge 2) { [void][long]::TryParse($p[1].Trim(), [ref]$res.Bytes) }
-        if ($p.Count -ge 3) { [void][double]::TryParse($p[2].Trim().Replace(',', '.'), [System.Globalization.NumberStyles]::Float, $invC, [ref]$res.Speed) }
+        $tmpBytes = 0L
+        $tmpSpeed = 0.0
+        if ($p.Count -ge 2 -and [long]::TryParse($p[1].Trim(), [ref]$tmpBytes)) { $res.Bytes = $tmpBytes }
+        if ($p.Count -ge 3 -and [double]::TryParse($p[2].Trim().Replace(',', '.'), [System.Globalization.NumberStyles]::Float, $invC, [ref]$tmpSpeed)) { $res.Speed = $tmpSpeed }
         if ($p.Count -ge 4 -and $p[3].Trim() -match '^\d+$') { $res.Exit = [int]$p[3].Trim() } else { $res.Exit = $LASTEXITCODE }
         $kb = [int][Math]::Round($res.Bytes / 1024.0)
         $kbs = [int][Math]::Round($res.Speed / 1024.0)

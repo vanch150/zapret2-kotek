@@ -164,6 +164,7 @@ function Get-Z2TelemetrySnapshot([string]$RootPath) {
                                 Name   = [System.IO.Path]::GetFileNameWithoutExtension($pr.Name)
                                 Ok     = [int]$v.ok
                                 Total  = [int]$v.total
+                                Ratio  = ([double]$v.ok / [double]$v.total)
                                 Freeze = [bool]$v.freeze
                                 YtF    = if ($null -ne $v.PSObject.Properties['ytF']) { [bool]$v.ytF } else { $null }
                                 CfF    = if ($null -ne $v.PSObject.Properties['cfF']) { [bool]$v.cfF } else { $null }
@@ -171,7 +172,7 @@ function Get-Z2TelemetrySnapshot([string]$RootPath) {
                             })
                         }
                     }
-                    $top3 = @($scList | Sort-Object @{Expression='Ok';Descending=$true}, @{Expression='Freeze';Descending=$true}, @{Expression='Ms';Ascending=$true} | Select-Object -First 3)
+                    $top3 = @($scList | Sort-Object @{Expression='Ratio';Descending=$true}, @{Expression='Freeze';Descending=$true}, @{Expression='Ms';Ascending=$true} | Select-Object -First 3)
                     if ($top3.Count -gt 0) {
                         $topStrs = @($top3 | ForEach-Object {
                             $fTag = if ($null -ne $_.YtF -or $null -ne $_.CfF) {

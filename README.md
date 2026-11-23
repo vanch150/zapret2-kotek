@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/vanch150/zapret2-kotek/releases/latest"><strong>Скачать v1.1.2</strong></a> ·
+  <a href="https://github.com/vanch150/zapret2-kotek/releases/latest"><strong>Скачать v1.1.3</strong></a> ·
   <a href="https://github.com/vanch150/zapret2-kotek/releases">Все релизы</a> ·
   <a href="#зачем-этот-проект">О проекте</a> ·
   <a href="#быстрый-старт">Установка</a> ·
@@ -36,7 +36,7 @@
 
 ## Быстрый старт
 
-1. Скачайте `zapret2-kotek-v1.1.2.zip` со страницы [Releases](https://github.com/vanch150/zapret2-kotek/releases/latest) и распакуйте в папку с английским путём (например, `C:\Zapret2`).
+1. Скачайте `zapret2-kotek-v1.1.3.zip` со страницы [Releases](https://github.com/vanch150/zapret2-kotek/releases/latest) и распакуйте в папку с английским путём (например, `C:\Zapret2`).
 2. Запустите `!_START_KOTEK.bat` и подтвердите права администратора.
 3. Запустите быструю настройку прямо в открывшемся окне — через 1–2 минуты службы поднимутся и заработают в фоне. После этого окно можно закрыть, при перезагрузке ПК всё стартует само.
 
@@ -78,7 +78,7 @@
 <summary>Под капотом (для тех, кому интересна техническая часть)</summary>
 
 - **Ядро:** `bin\winws2.exe` из [bol-van/zapret2](https://github.com/bol-van/zapret2) (1.0.7), Lua-скрипты (`lua\`) и ядерные фильтры `bin\filters\windivert_part.*`. Списки и `.bin`-фейки на базе [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) (1.10.4).
-- **Стратегии:** 10 базовых (`strategies\`) и 12 дополнительных (`configs_archive\`), бенчмарк по 27 целям + 256-КБ проверка по `speed.cloudflare.com` и проверка объёма/скорости по YouTube, синтез гибрида (`utils\deep_optimize.ps1`).
+- **Стратегии:** 12 базовых (`strategies\`) и 14 дополнительных (`configs_archive\`), бенчмарк по 27 целям + 256-КБ проверка по `speed.cloudflare.com` и проверка объёма/скорости по YouTube, синтез гибрида (`utils\deep_optimize.ps1`).
 - **Telegram Proxy:** C# 5 сервис (`utils\TgWsProxyService.cs`, собирается системным `.NET 4.x csc.exe`), служба `zapret-tgws` под `NT AUTHORITY\NetworkService`, loopback `127.0.0.1:1443`, режимы `smart` / `direct` / `cfonly`, равноправная гонка `ws://:80` и `wss://:443`.
 - **Обход ИИ:** точечные правила Windows NRPT (`utils\ai_bypass_helper.ps1`) на пул SmartDNS (`lists\ai-dns-pool.txt`) с автопаузой при активном системном VPN.
 - **Автообновление:** `utils\self_update.ps1` с обязательной проверкой `SHA256SUMS.txt` (fail-closed), защитой от Zip-Slip, сохранением пользовательских списков (`*-user.txt`, `ai-custom-domains.txt`, `targets.txt`) и задачей Планировщика в простое ПК.

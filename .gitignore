@@ -41,3 +41,6 @@ utils/telemetry.prompted
 
 # Локальные скрипты разработчика, планы и контекст ИИ
 dev/
+
+# Подключаемые внешние модули (например, kotek-antigravity-helper)
+modules/
