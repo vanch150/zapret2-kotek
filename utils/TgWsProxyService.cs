@@ -1126,6 +1126,8 @@ namespace ZapretTgWsProxy
     {
         private const int MaxConcurrentClients = 384;
         private const int DirectCircuitBreakerThreshold = 3;
+        private static readonly long[] DirectBackoffStepsMs = new long[] { 60000L, 180000L, 300000L };
+        private const long DirectStableResetMs = 120000L;
 
         public string Host = "127.0.0.1";
         public int Port = 1443;
@@ -1192,6 +1194,9 @@ namespace ZapretTgWsProxy
         // -1 = unknown, 0 = unreachable (circuit breaker open), 1 = reachable
         private int _directWsState = -1;
         private int _directFailStreak = 0;
+        private int _directBackoffStep = 0;
+        private int _directTrippedBefore = 0;
+        private long _directStableSinceUtcMs = 0;
         private volatile string _workingDirectIp = "149.154.167.220";
         private long _lastDirectProbeUtcMs = 0;
         private readonly SemaphoreSlim _directProbeLock = new SemaphoreSlim(1, 1);
@@ -1773,12 +1778,50 @@ namespace ZapretTgWsProxy
             }
         }
 
+        private long GetCurrentDirectBackoffMs()
+        {
+            int step = Volatile.Read(ref _directBackoffStep);
+            if (step < 0) step = 0;
+            if (step >= DirectBackoffStepsMs.Length) step = DirectBackoffStepsMs.Length - 1;
+            return DirectBackoffStepsMs[step];
+        }
+
+        private long AdvanceDirectBackoffOnTrip(bool isReprobeFailure)
+        {
+            long failNowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
+            Interlocked.Exchange(ref _lastDirectProbeUtcMs, failNowMs);
+            Interlocked.Exchange(ref _directStableSinceUtcMs, 0);
+            int prevTripped = Interlocked.Exchange(ref _directTrippedBefore, 1);
+            int prevState = Interlocked.Exchange(ref _directWsState, 0);
+
+            if (prevTripped != 0 && (isReprobeFailure || prevState != 0))
+            {
+                while (true)
+                {
+                    int cur = Volatile.Read(ref _directBackoffStep);
+                    int next = cur < (DirectBackoffStepsMs.Length - 1) ? cur + 1 : cur;
+                    if (next == cur || Interlocked.CompareExchange(ref _directBackoffStep, next, cur) == cur)
+                        break;
+                }
+            }
+            return GetCurrentDirectBackoffMs();
+        }
+
+        private void RecordDirectSuccess(long nowMs)
+        {
+            long sinceMs = Interlocked.CompareExchange(ref _directStableSinceUtcMs, nowMs, 0);
+            if (sinceMs > 0 && (nowMs - sinceMs) >= DirectStableResetMs)
+            {
+                Interlocked.Exchange(ref _directBackoffStep, 0);
+            }
+        }
+
         private async Task<bool> EnsureDirectWsProbedAsync(CancellationToken ct)
         {
             if (Mode == "cfonly" || ct.IsCancellationRequested)
                 return false;
 
-            long backoffMs = (Mode == "direct" || !FallbackCfProxy) ? 20000L : 180000L;
+            long backoffMs = GetCurrentDirectBackoffMs();
             int state = Volatile.Read(ref _directWsState);
             long nowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
             if (state == 1)
@@ -1796,6 +1839,7 @@ namespace ZapretTgWsProxy
             {
                 if (ct.IsCancellationRequested)
                     return false;
+                backoffMs = GetCurrentDirectBackoffMs();
                 state = Volatile.Read(ref _directWsState);
                 nowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
                 if (state == 1)
@@ -1840,6 +1884,8 @@ namespace ZapretTgWsProxy
                         if (!_userDcRedirects.Contains(2)) DcRedirects[2] = winIp;
                         if (!_userDcRedirects.Contains(4)) DcRedirects[4] = winIp;
                         Interlocked.Exchange(ref _directFailStreak, 0);
+                        long okNowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
+                        Interlocked.CompareExchange(ref _directStableSinceUtcMs, okNowMs, 0);
                         Interlocked.Exchange(ref _directWsState, 1);
                         Log("INFO", "Direct Telegram WS reachable via " + winIp);
 
@@ -1865,10 +1911,8 @@ namespace ZapretTgWsProxy
                 if (ct.IsCancellationRequested)
                     return false;
 
-                long failNowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
-                Interlocked.Exchange(ref _lastDirectProbeUtcMs, failNowMs);
-                Interlocked.Exchange(ref _directWsState, 0);
-                Log("INFO", "Direct Telegram WS IPs blocked by ISP (timeout) -> Instant Cloudflare Clean-IP routing enabled.");
+                long nextBackoffMs = AdvanceDirectBackoffOnTrip(true);
+                Log("INFO", string.Format("Direct Telegram WS IPs blocked by ISP (timeout, backoff {0}s) -> Instant Cloudflare Clean-IP routing enabled.", nextBackoffMs / 1000L));
                 return false;
             }
             finally
@@ -2045,6 +2089,7 @@ namespace ZapretTgWsProxy
                 RawWebSocket ws = await RawWebSocket.ConnectAsync(
                     targetIp, 443, domain, "/apiws", domain, true, BufferSize, 2500, "direct:" + domain + "@" + targetIp, ct).ConfigureAwait(false);
                 Interlocked.Exchange(ref _directFailStreak, 0);
+                RecordDirectSuccess(DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond);
                 return ws;
             }
             catch (OperationCanceledException)
@@ -2053,13 +2098,12 @@ namespace ZapretTgWsProxy
             }
             catch (Exception ex)
             {
+                Interlocked.Exchange(ref _directStableSinceUtcMs, 0);
                 int streak = Interlocked.Increment(ref _directFailStreak);
                 if (streak >= DirectCircuitBreakerThreshold)
                 {
-                    long failNowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
-                    Interlocked.Exchange(ref _lastDirectProbeUtcMs, failNowMs);
-                    Interlocked.Exchange(ref _directWsState, 0);
-                    Log("INFO", string.Format("Direct WS circuit breaker opened after {0} failures ({1})", streak, ex.Message));
+                    long nextBackoffMs = AdvanceDirectBackoffOnTrip(false);
+                    Log("INFO", string.Format("Direct WS circuit breaker opened after {0} failures, backoff {1}s ({2})", streak, nextBackoffMs / 1000L, ex.Message));
                 }
                 else
                 {
@@ -2402,7 +2446,13 @@ namespace ZapretTgWsProxy
                             return;
 
                         bool skipPool = (attempt > 0);
-                        RawWebSocket ws = await GetPooledDirectWsAsync(dc, isMedia, skipPool, ct).ConfigureAwait(false);
+                        bool skipDirectForBurst = (dc == 203 || isMedia)
+                            && Mode != "direct"
+                            && FallbackCfProxy
+                            && Volatile.Read(ref _directTrippedBefore) != 0;
+                        RawWebSocket ws = skipDirectForBurst
+                            ? null
+                            : await GetPooledDirectWsAsync(dc, isMedia, skipPool, ct).ConfigureAwait(false);
                         if (ws == null)
                         {
                             if (!_running || ct.IsCancellationRequested)
