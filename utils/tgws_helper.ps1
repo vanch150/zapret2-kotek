@@ -13,11 +13,31 @@ $RootDir = $env:Z2_ROOT
 if ([string]::IsNullOrWhiteSpace($RootDir)) {
     $RootDir = Split-Path -Parent $PSScriptRoot
 }
+$rawRoot = ([string]$RootDir).Trim().Trim('"')
+if ($rawRoot -match '^[A-Za-z]:$') { $rawRoot = $rawRoot + '\' }
 try {
-    $RootDir = [System.IO.Path]::GetFullPath($RootDir.Trim('"', "'")).TrimEnd('\', '/')
+    $RootDir = [System.IO.Path]::GetFullPath($rawRoot)
+    if ($RootDir.Length -gt 3) { $RootDir = $RootDir.TrimEnd('\', '/') }
 } catch {
-    $RootDir = $RootDir.Trim('"', "'", '\', '/')
+    $RootDir = $rawRoot
+    if ($RootDir.Length -gt 3) { $RootDir = $RootDir.TrimEnd('\', '/') }
+    if ($RootDir -match '^[A-Za-z]:$') { $RootDir = $RootDir + '\' }
 }
+
+$_commonPath = Join-Path $PSScriptRoot 'common.ps1'
+if (Test-Path -LiteralPath $_commonPath) {
+    try { . $_commonPath } catch {}
+}
+if (-not (Get-Command Test-Z2IsAdmin -ErrorAction SilentlyContinue)) {
+    function Test-Z2IsAdmin {
+        try {
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $pr = New-Object Security.Principal.WindowsPrincipal($id)
+            return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        } catch { return $false }
+    }
+}
+
 $BinDir   = Join-Path $RootDir 'bin'
 $LogsDir  = Join-Path $BinDir 'logs'
 $UtilsDir = Join-Path $RootDir 'utils'
@@ -32,23 +52,67 @@ $KnownTemplateSecrets = @('127217fa4fff26dd96ab708be1407e69')
 
 function Test-SafeExePath([string]$PathToCheck) {
     if ([string]::IsNullOrWhiteSpace($PathToCheck)) { return $false }
-    if ($PathToCheck -match '["''\x00-\x1F]') { return $false }
+    if ($PathToCheck -match '["\x00-\x1F]') { return $false }
     try {
         $fullExe = [System.IO.Path]::GetFullPath($PathToCheck)
         $fullBin = [System.IO.Path]::GetFullPath($BinDir).TrimEnd('\') + '\'
         if (-not $fullExe.StartsWith($fullBin, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
-        if ($fullExe -match '["''\x00-\x1F]') { return $false }
+        if ($fullExe -match '["\x00-\x1F]') { return $false }
         return $true
     } catch { return $false }
 }
 
 function Set-TgWsHardenedAcls {
+    if (-not (Test-Z2IsAdmin)) { return }
     $icacls = "$env:SystemRoot\System32\icacls.exe"
     if (-not (Test-Path -LiteralPath $icacls)) { return }
-    # Ensure NetworkService (*S-1-5-20) gets ONLY (RX) on root/utils/bin and (OI)(CI)(M) ONLY on bin\logs
-    try { & $icacls "$RootDir"  /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
-    try { & $icacls "$UtilsDir" /L /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)(F)" /grant:r "*S-1-5-32-544:(OI)(CI)(F)" /grant:r "*S-1-5-20:(OI)(CI)(RX)" /grant:r "*S-1-5-32-545:(OI)(CI)(RX)" /Q >$null 2>&1 } catch {}
-    try { & $icacls "$BinDir"   /L /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)(F)" /grant:r "*S-1-5-32-544:(OI)(CI)(F)" /grant:r "*S-1-5-20:(OI)(CI)(RX)" /grant:r "*S-1-5-32-545:(OI)(CI)(RX)" /Q >$null 2>&1 } catch {}
+
+    $isUserOrRootDir = ($RootDir -match '(?i)\\(Users|Downloads|Desktop|OneDrive|Temp)(\\|$)') -or ($RootDir.Length -le 3)
+    $helperPath = Join-Path $UtilsDir 'tgws_helper.ps1'
+    $shaPath    = Join-Path $BinDir 'tg-ws-proxy.sha256'
+
+    if ($isUserOrRootDir) {
+        # Inside user profile folders or drive root: NEVER strip inherited ACLs (/inheritance:r); add minimal NetworkService grants only
+        try { & $icacls "$RootDir" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
+        if (Test-Path -LiteralPath $UtilsDir) {
+            try { & $icacls "$UtilsDir" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
+        }
+        if (Test-Path -LiteralPath $BinDir) {
+            try { & $icacls "$BinDir" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
+        }
+        if (Test-Path -LiteralPath $ExePath) {
+            try { & $icacls "$ExePath" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
+        }
+        if (Test-Path -LiteralPath $ConfPath) {
+            try { & $icacls "$ConfPath" /L /grant:r "*S-1-5-20:(R)" /Q >$null 2>&1 } catch {}
+        }
+        if (-not (Test-Path -LiteralPath $LogsDir)) {
+            try { New-Item -ItemType Directory -Path $LogsDir -Force | Out-Null } catch {}
+        }
+        if (Test-Path -LiteralPath $LogsDir) {
+            $liLogs = Get-Item -LiteralPath $LogsDir -Force -ErrorAction SilentlyContinue
+            if ($null -ne $liLogs -and (($liLogs.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0)) {
+                try { & $icacls "$LogsDir" /L /grant:r "*S-1-5-20:(OI)(CI)(M)" /Q >$null 2>&1 } catch {}
+                try {
+                    Get-ChildItem -LiteralPath $LogsDir -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
+                        if (($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) {
+                            & $icacls $_.FullName /L /reset /Q >$null 2>&1
+                        }
+                    }
+                } catch {}
+            }
+        }
+        return
+    }
+
+    # Outside user profile and drive root: harden utils/bin/logs and 5 target files without inheriting NetworkService onto utils/bin children
+    try { & $icacls "$RootDir" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
+    if (Test-Path -LiteralPath $UtilsDir) {
+        try { & $icacls "$UtilsDir" /L /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)(F)" /grant:r "*S-1-5-32-544:(OI)(CI)(F)" /grant:r "*S-1-5-32-545:(OI)(CI)(RX)" /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
+    }
+    if (Test-Path -LiteralPath $BinDir) {
+        try { & $icacls "$BinDir" /L /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)(F)" /grant:r "*S-1-5-32-544:(OI)(CI)(F)" /grant:r "*S-1-5-32-545:(OI)(CI)(RX)" /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
+    }
 
     if (-not (Test-Path -LiteralPath $LogsDir)) {
         try { New-Item -ItemType Directory -Path $LogsDir -Force | Out-Null } catch {}
@@ -68,8 +132,6 @@ function Set-TgWsHardenedAcls {
     }
 
     # Restrict write access on executable, source, helper, sha256, and config to SYSTEM + Administrators only
-    $helperPath = Join-Path $UtilsDir 'tgws_helper.ps1'
-    $shaPath    = Join-Path $BinDir 'tg-ws-proxy.sha256'
     if (Test-Path -LiteralPath $ExePath) {
         try { & $icacls "$ExePath"    /L /inheritance:r /grant:r "*S-1-5-18:(F)" /grant:r "*S-1-5-32-544:(F)" /grant:r "*S-1-5-20:(RX)" /grant:r "*S-1-5-32-545:(RX)" /Q >$null 2>&1 } catch {}
     }
@@ -132,6 +194,7 @@ function Get-TgWsConfig([switch]$ReadOnly) {
         pool_size = '4'
         cfproxy_domain = ''
         cfproxy_worker_domain = ''
+        log_file = ''
         verbose = '0'
     }
     if (Test-Path -LiteralPath $ConfPath) {
@@ -217,24 +280,45 @@ function Get-TgWsConfig([switch]$ReadOnly) {
 }
 
 function Save-TgWsConfig($cfg) {
-    $lines = @(
-        '# Zapret2 Native Telegram MTProto WebSocket Bridge Configuration',
-        '# Managed via service.bat -> Option 5 (TG WS Proxy)',
-        "enabled=$($cfg['enabled'])",
-        "host=$($cfg['host'])",
-        "port=$($cfg['port'])",
-        "secret=$($cfg['secret'])",
-        "mode=$($cfg['mode'])",
-        "pool_size=$($cfg['pool_size'])",
-        "cfproxy_domain=$($cfg['cfproxy_domain'])",
-        "cfproxy_worker_domain=$($cfg['cfproxy_worker_domain'])",
-        "verbose=$($cfg['verbose'])"
-    )
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('# Zapret2 Native Telegram MTProto WebSocket Bridge Configuration')
+    $lines.Add('# Managed via service.bat -> Option 5 (TG WS Proxy)')
+    $lines.Add("enabled=$($cfg['enabled'])")
+    $lines.Add("host=$($cfg['host'])")
+    $lines.Add("port=$($cfg['port'])")
+    $lines.Add("secret=$($cfg['secret'])")
+    $lines.Add("mode=$($cfg['mode'])")
+    $lines.Add("pool_size=$($cfg['pool_size'])")
+    $lines.Add("cfproxy_domain=$($cfg['cfproxy_domain'])")
+    $lines.Add("cfproxy_worker_domain=$($cfg['cfproxy_worker_domain'])")
+    if (-not [string]::IsNullOrWhiteSpace([string]$cfg['log_file'])) {
+        $lines.Add("log_file=$([string]$cfg['log_file'])")
+    }
+    $lines.Add("verbose=$($cfg['verbose'])")
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllLines($ConfPath, $lines, $utf8NoBom)
+    [System.IO.File]::WriteAllLines($ConfPath, $lines.ToArray(), $utf8NoBom)
 }
 
-function Ensure-TgWsBinary {
+function Resolve-TgWsLogPath($cfg) {
+    $defaultLog = Join-Path $LogsDir 'tg-ws-proxy.log'
+    if ($null -eq $cfg) { return $defaultLog }
+    $rawLog = ([string]$cfg['log_file']).Trim().Trim('"')
+    if ([string]::IsNullOrWhiteSpace($rawLog)) { return $defaultLog }
+    try {
+        if ([System.IO.Path]::IsPathRooted($rawLog)) {
+            return [System.IO.Path]::GetFullPath($rawLog)
+        }
+        $candRoot = [System.IO.Path]::GetFullPath((Join-Path $RootDir $rawLog))
+        if (Test-Path -LiteralPath $candRoot) { return $candRoot }
+        $candLogs = [System.IO.Path]::GetFullPath((Join-Path $LogsDir $rawLog))
+        if (Test-Path -LiteralPath $candLogs) { return $candLogs }
+        return $candRoot
+    } catch {
+        return $defaultLog
+    }
+}
+
+function Ensure-TgWsBinary([switch]$SkipAcls) {
     $shaFile = Join-Path $BinDir 'tg-ws-proxy.sha256'
     if ((Test-Path -LiteralPath $ExePath) -and (Test-Path -LiteralPath $CsPath) -and (Test-Path -LiteralPath $shaFile)) {
         $wantCs = ''
@@ -249,7 +333,7 @@ function Ensure-TgWsBinary {
                 $curCs  = (Get-FileHash -LiteralPath $CsPath  -Algorithm SHA256).Hash.ToUpperInvariant()
                 $curExe = (Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash.ToUpperInvariant()
                 if ($wantCs -eq $curCs -and $wantExe -eq $curExe) {
-                    Set-TgWsHardenedAcls
+                    if (-not $SkipAcls -and (Test-Z2IsAdmin)) { Set-TgWsHardenedAcls }
                     return $true
                 }
             }
@@ -289,7 +373,7 @@ function Ensure-TgWsBinary {
             $builtExe = (Get-FileHash -LiteralPath $ExePath -Algorithm SHA256).Hash.ToUpperInvariant()
             $shaText = "CS=$builtCs`r`nEXE=$builtExe`r`n"
             [System.IO.File]::WriteAllText($shaFile, $shaText, (New-Object System.Text.UTF8Encoding($false)))
-            Set-TgWsHardenedAcls
+            if (-not $SkipAcls -and (Test-Z2IsAdmin)) { Set-TgWsHardenedAcls }
             Write-Host "[OK] Compiled native bin\tg-ws-proxy.exe successfully." -ForegroundColor Green
             return $true
         } catch {
@@ -342,7 +426,12 @@ function Connect-TelegramOneClick($cfg, [bool]$quietIfAlreadyConnected = $false)
 }
 
 function Install-And-Start-TgWsService([bool]$autoOpenTelegram = $false) {
+    if (-not (Test-Z2IsAdmin)) {
+        Write-Host "[X] Требуются права администратора для установки и запуска службы '$SvcName'." -ForegroundColor Red
+        return $false
+    }
     $cfg = Get-TgWsConfig
+    $curLogPath = Resolve-TgWsLogPath $cfg
 
     if (-not (Test-SafeExePath $ExePath)) {
         Write-Host "[X] Небезопасный путь к бинарнику: $ExePath" -ForegroundColor Red
@@ -364,7 +453,7 @@ function Install-And-Start-TgWsService([bool]$autoOpenTelegram = $false) {
     Stop-TgWsProcessByPath
     Start-Sleep -Milliseconds 250
 
-    if (-not (Ensure-TgWsBinary)) { return $false }
+    if (-not (Ensure-TgWsBinary -SkipAcls)) { return $false }
 
     $safeExe = [System.IO.Path]::GetFullPath($ExePath)
     $binEscaped = "\`"$safeExe\`" --service"
@@ -372,17 +461,46 @@ function Install-And-Start-TgWsService([bool]$autoOpenTelegram = $false) {
     $svcAccount = 'NT AUTHORITY\NetworkService'
     if ($svcExists) {
         $pCfg = Start-Process -FilePath $scExe -ArgumentList "config $SvcName binPath= `"$binEscaped`" obj= `"$svcAccount`" password= `"`" DisplayName= `"Zapret2 Telegram WS Proxy`" start= auto" -WindowStyle Hidden -Wait -PassThru
-        if ($pCfg.ExitCode -ne 0) {
-            Start-Process -FilePath $scExe -ArgumentList "create $SvcName binPath= `"$binEscaped`" obj= `"$svcAccount`" password= `"`" DisplayName= `"Zapret2 Telegram WS Proxy`" start= auto" -WindowStyle Hidden -Wait | Out-Null
+        $cfgRc = if ($null -ne $pCfg) { $pCfg.ExitCode } else { 1 }
+        if ($cfgRc -ne 0) {
+            $pCreate = Start-Process -FilePath $scExe -ArgumentList "create $SvcName binPath= `"$binEscaped`" obj= `"$svcAccount`" password= `"`" DisplayName= `"Zapret2 Telegram WS Proxy`" start= auto" -WindowStyle Hidden -Wait -PassThru
+            $createRc = if ($null -ne $pCreate) { $pCreate.ExitCode } else { 1 }
+            if ($createRc -ne 0) {
+                Write-Host "[X] Ошибка регистрации службы '$SvcName' (sc config=$cfgRc, sc create=$createRc)." -ForegroundColor Red
+                return $false
+            }
         }
     } else {
-        Start-Process -FilePath $scExe -ArgumentList "create $SvcName binPath= `"$binEscaped`" obj= `"$svcAccount`" password= `"`" DisplayName= `"Zapret2 Telegram WS Proxy`" start= auto" -WindowStyle Hidden -Wait | Out-Null
+        $pCreate = Start-Process -FilePath $scExe -ArgumentList "create $SvcName binPath= `"$binEscaped`" obj= `"$svcAccount`" password= `"`" DisplayName= `"Zapret2 Telegram WS Proxy`" start= auto" -WindowStyle Hidden -Wait -PassThru
+        $createRc = if ($null -ne $pCreate) { $pCreate.ExitCode } else { 1 }
+        if ($createRc -ne 0) {
+            Write-Host "[X] Ошибка создания службы '$SvcName' (sc create=$createRc)." -ForegroundColor Red
+            return $false
+        }
     }
-    Start-Process -FilePath $scExe -ArgumentList "description $SvcName `"Zapret2 Native Telegram Desktop MTProto WebSocket Bridge`"" -WindowStyle Hidden -Wait | Out-Null
-    Start-Process -FilePath $scExe -ArgumentList "failure $SvcName reset= 60 actions= restart/1000/restart/3000/restart/5000" -WindowStyle Hidden -Wait | Out-Null
-    Start-Process -FilePath $scExe -ArgumentList "failureflag $SvcName 1" -WindowStyle Hidden -Wait | Out-Null
+    $pDesc = Start-Process -FilePath $scExe -ArgumentList "description $SvcName `"Zapret2 Native Telegram Desktop MTProto WebSocket Bridge`"" -WindowStyle Hidden -Wait -PassThru
+    if ($null -eq $pDesc -or $pDesc.ExitCode -ne 0) {
+        $descRc = if ($null -ne $pDesc) { $pDesc.ExitCode } else { 1 }
+        Write-Host "[!] Предупреждение: sc description вернул код $descRc." -ForegroundColor Yellow
+    }
+    $pFail = Start-Process -FilePath $scExe -ArgumentList "failure $SvcName reset= 60 actions= restart/1000/restart/3000/restart/5000" -WindowStyle Hidden -Wait -PassThru
+    $failRc = if ($null -ne $pFail) { $pFail.ExitCode } else { 1 }
+    if ($failRc -ne 0) {
+        Write-Host "[X] Ошибка настройки перезапуска службы '$SvcName' (sc failure=$failRc)." -ForegroundColor Red
+        return $false
+    }
+    $pFailFlag = Start-Process -FilePath $scExe -ArgumentList "failureflag $SvcName 1" -WindowStyle Hidden -Wait -PassThru
+    if ($null -eq $pFailFlag -or $pFailFlag.ExitCode -ne 0) {
+        $ffRc = if ($null -ne $pFailFlag) { $pFailFlag.ExitCode } else { 1 }
+        Write-Host "[!] Предупреждение: sc failureflag вернул код $ffRc." -ForegroundColor Yellow
+    }
     Set-TgWsHardenedAcls
-    Start-Process -FilePath $scExe -ArgumentList "start $SvcName" -WindowStyle Hidden -Wait | Out-Null
+    $pStart = Start-Process -FilePath $scExe -ArgumentList "start $SvcName" -WindowStyle Hidden -Wait -PassThru
+    $startRc = if ($null -ne $pStart) { $pStart.ExitCode } else { 1 }
+    if ($startRc -ne 0 -and $startRc -ne 1056) {
+        Write-Host "[X] Ошибка запуска службы '$SvcName' (sc start=$startRc). Лог: $curLogPath" -ForegroundColor Red
+        return $false
+    }
 
     $state = 'STOPPED'
     for ($w = 0; $w -lt 20; $w++) {
@@ -398,12 +516,16 @@ function Install-And-Start-TgWsService([bool]$autoOpenTelegram = $false) {
         }
         return $true
     } else {
-        Write-Host "[!] Service '$SvcName' state: $state. Check $LogPath for details." -ForegroundColor Yellow
+        Write-Host "[!] Service '$SvcName' state: $state. Check $curLogPath for details." -ForegroundColor Yellow
         return $false
     }
 }
 
 function Remove-TgWsService {
+    if (-not (Test-Z2IsAdmin)) {
+        Write-Host "[X] Требуются права администратора для удаления службы '$SvcName'." -ForegroundColor Red
+        return $false
+    }
     $svc = Get-Service -Name $SvcName -ErrorAction SilentlyContinue
     if ($null -ne $svc) {
         try {
@@ -415,15 +537,34 @@ function Remove-TgWsService {
             try { $svc.Dispose() } catch {}
         }
         Stop-TgWsProcessByPath
-        Start-Process -FilePath "$env:SystemRoot\System32\sc.exe" -ArgumentList "delete $SvcName" -WindowStyle Hidden -Wait | Out-Null
+        $scExe = "$env:SystemRoot\System32\sc.exe"
+        $pDel = Start-Process -FilePath $scExe -ArgumentList "delete $SvcName" -WindowStyle Hidden -Wait -PassThru
+        $delRc = if ($null -ne $pDel) { $pDel.ExitCode } else { 1 }
+        $stillExists = $false
+        for ($i = 0; $i -lt 10; $i++) {
+            $chk = Get-Service -Name $SvcName -ErrorAction SilentlyContinue
+            if ($null -eq $chk) {
+                $stillExists = $false
+                break
+            }
+            $stillExists = $true
+            try { $chk.Dispose() } catch {}
+            Start-Sleep -Milliseconds 200
+        }
+        if ($delRc -ne 0 -or $stillExists) {
+            Write-Host "[X] Не удалось удалить службу '$SvcName' (sc delete=$delRc, exists=$stillExists)." -ForegroundColor Red
+            return $false
+        }
         Write-Host "Service '$SvcName' stopped and removed." -ForegroundColor Yellow
+        return $true
     } else {
         Write-Host "Service '$SvcName' is not installed." -ForegroundColor DarkGray
         Stop-TgWsProcessByPath
+        return $true
     }
 }
 
-$cfg = Get-TgWsConfig -ReadOnly:($Action -eq 'status' -or $Action -eq 'remove-service')
+$cfg = Get-TgWsConfig -ReadOnly:($Action -eq 'status' -or $Action -eq 'remove-service' -or -not (Test-Z2IsAdmin))
 if ($Action -eq 'status') {
     $st = Get-ServiceState
     if ($st -eq 'RUNNING') {
@@ -436,10 +577,14 @@ if ($Action -eq 'status') {
     exit 0
 }
 if ($Action -eq 'compile-only') {
-    if (Ensure-TgWsBinary) { Set-TgWsHardenedAcls; exit 0 } else { exit 1 }
+    if (Ensure-TgWsBinary) { exit 0 } else { exit 1 }
 }
 if ($Action -eq 'ensure-service' -or $Action -eq 'ensure-service-silent') {
     if ($cfg['enabled'] -ne '0') {
+        if (-not (Test-Z2IsAdmin)) {
+            Write-Host "[X] Требуются права администратора для установки и запуска службы '$SvcName'." -ForegroundColor Red
+            exit 1
+        }
         $cfg['enabled'] = '1'
         Save-TgWsConfig $cfg
         $openTg = ($Action -eq 'ensure-service')
@@ -450,11 +595,19 @@ if ($Action -eq 'ensure-service' -or $Action -eq 'ensure-service-silent') {
 }
 
 if ($Action -eq 'remove-service') {
-    Remove-TgWsService
+    if (-not (Test-Z2IsAdmin)) {
+        Write-Host "[X] Требуются права администратора для удаления службы '$SvcName'." -ForegroundColor Red
+        exit 1
+    }
+    $remOk = Remove-TgWsService
+    if (-not $remOk) {
+        Write-Host "[X] Ошибка удаления службы '$SvcName'." -ForegroundColor Red
+        exit 1
+    }
     exit 0
 }
 
-if ((Get-ServiceState) -ne 'RUNNING' -and $cfg['enabled'] -eq '1') {
+if ((Test-Z2IsAdmin) -and (Get-ServiceState) -ne 'RUNNING' -and $cfg['enabled'] -eq '1') {
     Write-Host "Auto-starting 'zapret-tgws' service..." -ForegroundColor Cyan
     Install-And-Start-TgWsService $false | Out-Null
 }
@@ -462,7 +615,8 @@ if ((Get-ServiceState) -ne 'RUNNING' -and $cfg['enabled'] -eq '1') {
 # Interactive Menu (Option 5)
 while ($true) {
     Clear-Host
-    $cfg = Get-TgWsConfig
+    $isAdmin = Test-Z2IsAdmin
+    $cfg = Get-TgWsConfig -ReadOnly:(-not $isAdmin)
     $svc = Get-Service -Name $SvcName -ErrorAction SilentlyContinue
     $svcState = 'Не установлена'
     if ($null -ne $svc) {
@@ -476,6 +630,9 @@ while ($true) {
     Write-Host '  ==============================================================' -ForegroundColor Cyan
     Write-Host ("  Статус службы  : {0}" -f $svcState) -ForegroundColor $(if ($svcState -eq 'Running') { 'Green' } else { 'Yellow' })
     Write-Host ("  Локальный адрес: {0}:{1} (режим: {2})" -f $cfg['host'], $cfg['port'], $cfg['mode'])
+    if (-not $isAdmin) {
+        Write-Host '  [!] ВНИМАНИЕ: запущено без прав администратора (действия со службой недоступны).' -ForegroundColor Yellow
+    }
     Write-Host '  --------------------------------------------------------------'
     Write-Host '  [1] Подключить Telegram в 1 клик (Запуск службы + открытие TG)' -ForegroundColor Green
     Write-Host '  [2] Переключить режим прокси (smart / direct / cfonly)'
@@ -488,32 +645,50 @@ while ($true) {
 
     if ($ch -eq '0') { break }
     elseif ($ch -eq '1') {
-        $cfg['enabled'] = '1'
-        Save-TgWsConfig $cfg
-        if (Install-And-Start-TgWsService $false) { Connect-TelegramOneClick $cfg $false }
+        if (-not (Test-Z2IsAdmin)) {
+            Write-Host "`n  [X] Требуются права администратора для установки и запуска службы." -ForegroundColor Red
+        } else {
+            $cfg['enabled'] = '1'
+            Save-TgWsConfig $cfg
+            if (Install-And-Start-TgWsService $false) { Connect-TelegramOneClick $cfg $false }
+        }
         Read-Host "`n  Нажмите Enter для продолжения"
     }
     elseif ($ch -eq '2') {
-        $modes = @('smart', 'direct', 'cfonly')
-        $curIdx = [array]::IndexOf($modes, $cfg['mode'])
-        if ($curIdx -lt 0) { $curIdx = 0 }
-        $nextMode = $modes[($curIdx + 1) % $modes.Length]
-        $cfg['mode'] = $nextMode
-        Save-TgWsConfig $cfg
-        if (Install-And-Start-TgWsService $false) { Write-Host "`n  [OK] Режим переключен на: $nextMode" -ForegroundColor Green }
+        if (-not (Test-Z2IsAdmin)) {
+            Write-Host "`n  [X] Требуются права администратора для переключения режима и перезапуска службы." -ForegroundColor Red
+        } else {
+            $modes = @('smart', 'direct', 'cfonly')
+            $curIdx = [array]::IndexOf($modes, $cfg['mode'])
+            if ($curIdx -lt 0) { $curIdx = 0 }
+            $nextMode = $modes[($curIdx + 1) % $modes.Length]
+            $cfg['mode'] = $nextMode
+            Save-TgWsConfig $cfg
+            if (Install-And-Start-TgWsService $false) { Write-Host "`n  [OK] Режим переключен на: $nextMode" -ForegroundColor Green }
+        }
         Read-Host "`n  Нажмите Enter для продолжения"
     }
     elseif ($ch -eq '3') {
-        $cfg['enabled'] = '0'
-        Save-TgWsConfig $cfg
-        Remove-TgWsService
+        if (-not (Test-Z2IsAdmin)) {
+            Write-Host "`n  [X] Требуются права администратора для остановки и удаления службы." -ForegroundColor Red
+        } else {
+            if (Remove-TgWsService) {
+                $cfg['enabled'] = '0'
+                Save-TgWsConfig $cfg
+            } else {
+                Write-Host "`n  [X] Не удалось удалить службу '$SvcName'." -ForegroundColor Red
+            }
+        }
         Read-Host "`n  Нажмите Enter для продолжения"
     }
     elseif ($ch -eq '4') {
         Write-Host "`n  Ссылка прокси: $proxyLink" -ForegroundColor Cyan
-        if (Test-Path -LiteralPath $LogPath) {
-            Write-Host "`n  --- Последние 15 строк лога ---" -ForegroundColor Gray
-            try { Get-Content -LiteralPath $LogPath -Tail 15 } catch { Write-Host '  [!] Лог сейчас обновляется, попробуйте ещё раз.' -ForegroundColor Yellow }
+        $curLogPath = Resolve-TgWsLogPath $cfg
+        if (Test-Path -LiteralPath $curLogPath) {
+            Write-Host "`n  --- Последние 15 строк лога ($curLogPath) ---" -ForegroundColor Gray
+            try { Get-Content -LiteralPath $curLogPath -Tail 15 } catch { Write-Host '  [!] Лог сейчас обновляется, попробуйте ещё раз.' -ForegroundColor Yellow }
+        } else {
+            Write-Host "`n  [i] Файл лога не найден: $curLogPath" -ForegroundColor DarkGray
         }
         Read-Host "`n  Нажмите Enter для продолжения"
     }

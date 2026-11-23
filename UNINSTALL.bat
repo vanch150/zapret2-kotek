@@ -2,6 +2,8 @@
 chcp 65001 > nul
 set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 for %%I in ("%~dp0.") do set "Z2_ROOT=%%~fI"
+set "Z2_ROOT_ARG=%Z2_ROOT%"
+if "%Z2_ROOT_ARG:~-1%"=="\" set "Z2_ROOT_ARG=%Z2_ROOT_ARG%\"
 cd /d "%TEMP%"
 
 "%SystemRoot%\System32\fltmc.exe" >nul 2>&1
@@ -12,10 +14,10 @@ if %errorlevel% neq 0 (
         exit /b 1
     )
     set "Z2_SELF=%~f0"
-    "%PS_EXE%" -NoProfile -Command "Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList ('/d /s /c \"\"' + $env:Z2_SELF + '\" admin\"') -WorkingDirectory $env:TEMP -Verb RunAs"
+    "%PS_EXE%" -NoProfile -Command "Start-Process -FilePath ($env:SystemRoot + '\System32\cmd.exe') -ArgumentList ('/d /s /c \"\"' + ($env:Z2_SELF.Replace([string][char]37, '\"^' + [char]37 + '\"')) + '\" admin\"') -WorkingDirectory $env:TEMP -Verb RunAs"
     exit /b
 )
 
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0utils\uninstall.ps1" -Root "%Z2_ROOT%"
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%~dp0utils\uninstall.ps1" -Root "%Z2_ROOT_ARG%"
 if "%errorlevel%"=="20" exit /b 0
 pause

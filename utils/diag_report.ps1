@@ -59,12 +59,15 @@ if ($pathWarn.Count -eq 0) {
 }
 
 # 2b. Service path match check (detects running from a sibling folder)
+$svcRootDir = ''
+$svcConfFromImg = ''
 try {
     $imgP = (Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Services\zapret' -Name 'ImagePath' -ErrorAction SilentlyContinue).ImagePath
     if (-not [string]::IsNullOrWhiteSpace($imgP)) {
-        $em = [regex]::Match($imgP, '"?([A-Za-z]:\\[^"]+?\\bin\\winws2\.exe)"?', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        $em = [regex]::Match($imgP, '"?([A-Za-z]:\\(?:[^"]+\\)?bin\\winws2\.exe)"?', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
         if ($em.Success) {
             $svcDir = [System.IO.Path]::GetFullPath((Split-Path -Parent (Split-Path -Parent $em.Groups[1].Value))).TrimEnd('\') + '\'
+            $svcRootDir = $svcDir
             $curDir = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
             if ($svcDir -ine $curDir) {
                 $safeSvc = if ($env:USERPROFILE) { $svcDir -ireplace [regex]::Escape($env:USERPROFILE), '%USERPROFILE%' } else { $svcDir }
@@ -73,6 +76,8 @@ try {
                 Add-DiagCheck 'svc_path' 'Путь службы zapret' 'OK' 'Совпадает с текущей папкой' ''
             }
         }
+        $cm = [regex]::Match($imgP, '@"?([A-Za-z]:\\[^"]+?\.conf)"?', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+        if ($cm.Success) { $svcConfFromImg = $cm.Groups[1].Value }
     }
 } catch {}
 
@@ -141,7 +146,7 @@ if ($hardConflicts.Count -gt 0) {
 }
 
 # 6. VPN & NLM auto-exclude check (reusing nlm_helper.ps1 regex)
-$vpnRx = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|\b(TAP|TUN)\b|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
+$vpnRx = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|\b(TAP|TUN)\b|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Radmin|Hamachi|ZeroTier|Tailscale|Happ|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
 $unidNetRx = '^(?i)(Unidentified network|Неопознанная сеть)(\s*\(.*\))?$'
 $nlmAutoOn = Test-Path -LiteralPath (Join-Path $Root 'utils\nlm_auto.enabled')
 $nlmFilterRaw = ''
@@ -275,7 +280,14 @@ if ($tcpTsState -eq 'unknown') {
     } catch {}
 }
 $usesTcpTs = $false
-$svcConfPath = Join-Path $Root 'bin\service.conf'
+$svcConfPath = ''
+if ($svcConfFromImg -and (Test-Path -LiteralPath $svcConfFromImg)) {
+    $svcConfPath = $svcConfFromImg
+} elseif ($svcRootDir) {
+    $candConf = Join-Path $svcRootDir 'bin\service.conf'
+    if (Test-Path -LiteralPath $candConf) { $svcConfPath = $candConf }
+}
+if (-not $svcConfPath) { $svcConfPath = Join-Path $Root 'bin\service.conf' }
 if (Test-Path -LiteralPath $svcConfPath) {
     $confRaw = [string](Get-Content -LiteralPath $svcConfPath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue)
     if ($confRaw -match 'tcp_ts') { $usesTcpTs = $true }
@@ -340,7 +352,7 @@ $p7tv = Invoke-Z2DiagProbe 'https://cdn.7tv.app' 4
 $pCf  = Invoke-Z2DiagProbe 'https://speed.cloudflare.com/__down?bytes=262144' 6
 
 $ytOk   = ($pYt.Exit -eq 0 -and $pYt.Code -match '^[23]\d\d$' -and ($pYt.Code -ne '200' -or $pYt.Bytes -ge 65536))
-$ytHdOk = ($pYtH.Exit -eq 0 -and $pYtH.Code -eq '200' -and $pYtH.Bytes -ge 65536 -and $pYtH.Speed -ge 40000)
+$ytHdOk = ($pYtH.Exit -eq 0 -and $pYtH.Code -eq '200' -and $pYtH.Bytes -ge 40960 -and $pYtH.Speed -ge 20000)
 $dcOk   = ($pDc.Exit -eq 0 -and $pDc.Code -match '^[23]\d\d$')
 $tv7Ok  = ($p7tv.Exit -eq 0 -and $p7tv.Code -match '^[234]\d\d$')
 $cfOk   = ($pCf.Exit -eq 0 -and $pCf.Code -eq '200' -and $pCf.Bytes -ge 200000)

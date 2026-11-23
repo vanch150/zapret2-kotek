@@ -2,8 +2,23 @@
 
 function Resolve-Z2Root([string]$Root = '') {
     if ([string]::IsNullOrWhiteSpace($Root)) { $Root = $env:Z2_ROOT }
-    if ([string]::IsNullOrWhiteSpace($Root)) { $Root = Split-Path -Parent $PSScriptRoot }
-    try { return ([System.IO.Path]::GetFullPath($Root.Trim('"', "'")).TrimEnd('\', '/') + '\') } catch { return ($Root.Trim('"', "'", '\', '/') + '\') }
+    $clean = if ($null -ne $Root) { $Root.Trim().Trim('"').Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($clean)) { $clean = ([string]$env:Z2_ROOT).Trim().Trim('"').Trim() }
+    if ([string]::IsNullOrWhiteSpace($clean)) { $clean = Split-Path -Parent $PSScriptRoot }
+    if ($clean -match '^[A-Za-z]:$') { $clean += '\' }
+    try { return ([System.IO.Path]::GetFullPath($clean).TrimEnd('\', '/') + '\') } catch { return ($clean.TrimEnd('\', '/') + '\') }
+}
+
+function Format-Z2DirNoSlash([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    if ($Path -match '^[A-Za-z]:[/\\]?$') { return ($Path.Substring(0, 2) + '\') }
+    return $Path.TrimEnd('\', '/')
+}
+
+function Format-Z2CliPathArg([string]$Path) {
+    if ([string]::IsNullOrWhiteSpace($Path)) { return '' }
+    if ($Path.EndsWith('\')) { return ($Path + '\') }
+    return $Path
 }
 
 function Get-Z2Version([string]$Root) {
@@ -76,29 +91,53 @@ function Get-Z2IpsetMode([string]$Root) {
 }
 
 function Set-Z2IpsetMode([string]$Root, [string]$Mode) {
+    $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+    $isRunning = $false
+    if ($null -ne $svc) {
+        try {
+            $isRunning = ($svc.Status -eq 'Running')
+        } finally {
+            try { $svc.Dispose() } catch {}
+        }
+    }
+    if ($isRunning -and (-not (Test-Z2IsAdmin))) {
+        return $false
+    }
     $ipFile = Join-Path $Root 'lists\ipset-all.txt'
     $bakFile = Join-Path $Root 'lists\ipset-all.txt.backup'
     $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
     $curMode = Get-Z2IpsetMode $Root
-    if ($curMode -eq 'loaded' -and $Mode -ne 'loaded') {
-        Copy-Item -LiteralPath $ipFile -Destination $bakFile -Force -ErrorAction SilentlyContinue
-    }
-    if ($Mode -eq 'none') {
-        [System.IO.File]::WriteAllText($ipFile, "203.0.113.113/32`r`n", $utf8NoBom)
-    } elseif ($Mode -eq 'any') {
-        [System.IO.File]::WriteAllText($ipFile, '', $utf8NoBom)
-    } elseif ($Mode -eq 'loaded') {
-        if ($curMode -ne 'loaded') {
-            if (Test-Path -LiteralPath $bakFile) {
-                Copy-Item -LiteralPath $bakFile -Destination $ipFile -Force -ErrorAction SilentlyContinue
-            } else {
-                return $false
+    try {
+        if ($curMode -eq 'loaded' -and $Mode -ne 'loaded') {
+            Copy-Item -LiteralPath $ipFile -Destination $bakFile -Force -ErrorAction Stop
+        }
+        if ($Mode -eq 'none') {
+            [System.IO.File]::WriteAllText($ipFile, "203.0.113.113/32`r`n", $utf8NoBom)
+        } elseif ($Mode -eq 'any') {
+            [System.IO.File]::WriteAllText($ipFile, '', $utf8NoBom)
+        } elseif ($Mode -eq 'loaded') {
+            if ($curMode -ne 'loaded') {
+                if (Test-Path -LiteralPath $bakFile) {
+                    Copy-Item -LiteralPath $bakFile -Destination $ipFile -Force -ErrorAction Stop
+                } else {
+                    return $false
+                }
             }
         }
+    } catch {
+        return $false
     }
-    $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
-    if ($null -ne $svc -and $svc.Status -eq 'Running') {
-        Restart-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
+    $svcAfter = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+    if ($null -ne $svcAfter) {
+        try {
+            if ($svcAfter.Status -eq 'Running') {
+                Restart-Service -Name 'zapret' -Force -ErrorAction Stop
+            }
+        } catch {
+            return $false
+        } finally {
+            try { $svcAfter.Dispose() } catch {}
+        }
     }
     return $true
 }
@@ -369,6 +408,7 @@ public static class Z2ShellFolderIcon {
 }
 
 function Set-Z2DesktopAndFolderIcons([string]$Root, [switch]$FolderOnly) {
+    $Root = Resolve-Z2Root $Root
     $icoPath = Join-Path $Root 'utils\kotek.ico'
     if (-not $FolderOnly -and (Test-Path -LiteralPath $icoPath)) {
     # 1. Create Desktop & Start Menu shortcuts "Zapret2 Kotek.lnk" pointing to !_START_KOTEK.bat
@@ -381,7 +421,7 @@ function Set-Z2DesktopAndFolderIcons([string]$Root, [switch]$FolderOnly) {
                 $lnkPath = Join-Path $lnkDir 'Zapret2 Kotek.lnk'
                 $sc = $wsh.CreateShortcut($lnkPath)
                 $sc.TargetPath = $targetBat
-                $sc.WorkingDirectory = $Root.TrimEnd('\')
+                $sc.WorkingDirectory = Format-Z2DirNoSlash $Root
                 $sc.IconLocation = "$icoPath,0"
                 $sc.WindowStyle = 7
                 $sc.Description = 'Zapret2 Kotek — обход DPI и Telegram Proxy'
@@ -391,6 +431,7 @@ function Set-Z2DesktopAndFolderIcons([string]$Root, [switch]$FolderOnly) {
     } catch {}
     }
     # 2. Build adaptive folder icon (native Windows folder + Kotek perched on top) and apply via desktop.ini
+    if ($Root -match '^[A-Za-z]:\\$') { return }
     try {
         $perchPng = Join-Path $Root 'utils\kotek_perch.png'
         $folderIco = Join-Path $Root 'utils\kotek_folder.ico'
@@ -400,30 +441,33 @@ function Set-Z2DesktopAndFolderIcons([string]$Root, [switch]$FolderOnly) {
             $builtIco = Build-Z2PerchFolderIcon -PerchPngPath $perchPng -OutIcoPath $folderIco -BadgePngPath $happyPng
         }
         if ($builtIco -and (Test-Path -LiteralPath $folderIco)) {
-            $rootClean = $Root.TrimEnd('\')
-            $iniPath = Join-Path $rootClean 'desktop.ini'
+            $rootClean = Format-Z2DirNoSlash $Root
+            $iniPath = Join-Path $Root 'desktop.ini'
+            $attribExe = "$env:SystemRoot\System32\attrib.exe"
             $iniText = "[.ShellClassInfo]`r`nIconResource=utils\kotek_folder.ico,0`r`nInfoTip=Zapret2 Kotek`r`n"
             if (Test-Path -LiteralPath $iniPath) {
-                & attrib.exe -h -s "$iniPath" 2>$null | Out-Null
+                & $attribExe -h -s "$iniPath" 2>$null | Out-Null
             }
             [System.IO.File]::WriteAllText($iniPath, $iniText, (New-Object System.Text.UTF8Encoding($false)))
-            & attrib.exe +h +s "$iniPath" 2>$null | Out-Null
-            & attrib.exe +r +s "$rootClean" 2>$null | Out-Null
+            & $attribExe +h +s "$iniPath" 2>$null | Out-Null
+            & $attribExe +r +s "$rootClean" 2>$null | Out-Null
         }
     } catch {}
 }
 
 function Register-Z2UninstallEntry([string]$Root) {
     try {
-        $rootClean = $Root.TrimEnd('\')
-        $uninstBat = Join-Path $rootClean 'UNINSTALL.bat'
-        if (-not (Test-Path -LiteralPath $uninstBat)) { $uninstBat = Join-Path $rootClean 'utils\UNINSTALL.bat' }
+        $Root = Resolve-Z2Root $Root
+        $rootClean = Format-Z2DirNoSlash $Root
+        $uninstBat = Join-Path $Root 'UNINSTALL.bat'
+        if (-not (Test-Path -LiteralPath $uninstBat)) { $uninstBat = Join-Path $Root 'utils\UNINSTALL.bat' }
         if (-not (Test-Path -LiteralPath $uninstBat)) { return }
         $ver = Get-Z2Version $Root
-        $ico = Join-Path $rootClean 'utils\kotek.ico'
+        $ico = Join-Path $Root 'utils\kotek.ico'
         $regKey = 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\Zapret2Kotek'
         if (-not (Test-Path -LiteralPath $regKey)) { New-Item -Path $regKey -Force | Out-Null }
-        $uninstCmd = "`"$env:SystemRoot\System32\cmd.exe`" /d /c `"`"$uninstBat`"`""
+        $uninstBatEsc = $uninstBat -replace '%', '"^%"'
+        $uninstCmd = "`"$env:SystemRoot\System32\cmd.exe`" /d /s /c `"`"$uninstBatEsc`"`""
         New-ItemProperty -Path $regKey -Name 'DisplayName'     -Value 'Zapret2 Kotek' -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $regKey -Name 'DisplayVersion'  -Value $ver -PropertyType String -Force | Out-Null
         New-ItemProperty -Path $regKey -Name 'Publisher'       -Value 'vanch150' -PropertyType String -Force | Out-Null
@@ -441,12 +485,13 @@ function Register-Z2UninstallEntry([string]$Root) {
 
 function Register-Z2TrayStartupTask([string]$Root) {
     try {
-        $rootClean = $Root.Trim('"', "'").TrimEnd('\', '/') + '\'
+        $rootClean = Resolve-Z2Root $Root
         $guiScript = Join-Path $rootClean 'utils\gui_app.ps1'
         if (-not (Test-Path -LiteralPath $guiScript)) { return $false }
         $psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
-        $rootNoSlash = $rootClean.TrimEnd('\')
-        $taskArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File `"$guiScript`" -Root `"$rootNoSlash`" -StartInTray"
+        $rootNoSlash = Format-Z2DirNoSlash $rootClean
+        $rootCliArg = Format-Z2CliPathArg $rootNoSlash
+        $taskArgs = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File `"$guiScript`" -Root `"$rootCliArg`" -StartInTray"
 
         $sched = New-Object -ComObject 'Schedule.Service'
         $sched.Connect()
@@ -471,7 +516,7 @@ function Register-Z2TrayStartupTask([string]$Root) {
         $act = $td.Actions.Create(0)
         $act.Path             = $psExe
         $act.Arguments        = $taskArgs
-        $act.WorkingDirectory = $rootClean.TrimEnd('\')
+        $act.WorkingDirectory = $rootNoSlash
 
         $folder.RegisterTaskDefinition('Zapret2KotekTray', $td, 6, $null, $null, 3, $null) | Out-Null
         return $true
@@ -479,13 +524,28 @@ function Register-Z2TrayStartupTask([string]$Root) {
 }
 
 function Unregister-Z2TrayStartupTask {
+    $ok = $false
     try {
         $sched = New-Object -ComObject 'Schedule.Service'
         $sched.Connect()
         $folder = $sched.GetFolder('\')
-        $folder.DeleteTask('Zapret2KotekTray', 0)
+        try {
+            $folder.DeleteTask('Zapret2KotekTray', 0)
+            $ok = $true
+        } catch {
+            if ($_.Exception.HResult -eq -2147024894) {
+                $ok = $true
+            }
+        }
     } catch {}
-    try { & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN 'Zapret2KotekTray' /F >$null 2>&1 } catch {}
+    if (-not $ok) {
+        try {
+            $global:LASTEXITCODE = 0
+            & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN 'Zapret2KotekTray' /F >$null 2>&1
+            if ($LASTEXITCODE -eq 0) { $ok = $true }
+        } catch {}
+    }
+    return $ok
 }
 function Test-Z2IsAdmin {
     try {

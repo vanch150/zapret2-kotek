@@ -5,9 +5,29 @@
 )
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $ErrorActionPreference = 'SilentlyContinue'
-if (-not $Root) { $Root = $env:Z2_ROOT }
-if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
-$Root = $Root.Trim('"', "'", '\', '/') + '\'
+$commonPath = Join-Path $PSScriptRoot 'common.ps1'
+if ((Test-Path -LiteralPath $commonPath) -and -not (Get-Command Resolve-Z2Root -ErrorAction SilentlyContinue)) {
+    . $commonPath
+}
+if (-not (Get-Command Test-Z2IsAdmin -ErrorAction SilentlyContinue)) {
+    function Test-Z2IsAdmin {
+        try {
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $pr = New-Object Security.Principal.WindowsPrincipal($id)
+            return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        } catch { return $false }
+    }
+}
+$Root = if (Get-Command Resolve-Z2Root -ErrorAction SilentlyContinue) {
+    Resolve-Z2Root $Root
+} else {
+    if ([string]::IsNullOrWhiteSpace($Root)) { $Root = $env:Z2_ROOT }
+    $cleanR = if ($null -ne $Root) { $Root.Trim().Trim('"').Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($cleanR)) { $cleanR = Split-Path -Parent $PSScriptRoot }
+    if ($cleanR -match '^[A-Za-z]:$') { $cleanR += '\' }
+    try { [System.IO.Path]::GetFullPath($cleanR).TrimEnd('\', '/') + '\' } catch { $cleanR.TrimEnd('\', '/') + '\' }
+}
+$script:Z2LastBrowserOpOk = $true
 $script:Z2BrowserMarkerFile = Join-Path $Root 'utils\browser_policy.applied'
 $script:Z2BrowserBackupFile = Join-Path $Root 'utils\browser_policy.backup.json'
 
@@ -274,7 +294,15 @@ function Update-Z2BrowserMarker([string]$RootPath) {
 }
 
 function Enable-BrowserFix([string[]]$FilterIds = @(), [string]$RootPath = '', [bool]$SetQuic = $true, [bool]$SetDoh = $false) {
-    if (-not $SetQuic -and -not $SetDoh) { return @() }
+    $script:Z2LastBrowserOpOk = $false
+    if (-not (Test-Z2IsAdmin)) {
+        Write-Host '  [X] Требуются права администратора для изменения политик браузеров.' -ForegroundColor Red
+        return @()
+    }
+    if (-not $SetQuic -and -not $SetDoh) {
+        $script:Z2LastBrowserOpOk = $true
+        return @()
+    }
     if (-not $RootPath) { $RootPath = $Root }
     $det = Get-Z2BrowserStates
     $targets = New-Object System.Collections.Generic.List[object]
@@ -284,11 +312,13 @@ function Enable-BrowserFix([string[]]$FilterIds = @(), [string]$RootPath = '', [
         $targets.Add($b)
     }
     if ($targets.Count -eq 0) {
+        $script:Z2LastBrowserOpOk = $true
         Write-Host '  [ИНФО] Подходящие браузеры для автоматической настройки не найдены.' -ForegroundColor Yellow
         return @()
     }
     Save-Z2BrowserPolicyBackup $RootPath
     $applied = New-Object System.Collections.Generic.List[string]
+    $failedOps = 0
     foreach ($b in $targets) {
         try {
             if ($b.Kind -eq 'chromium') {
@@ -329,6 +359,7 @@ function Enable-BrowserFix([string[]]$FilterIds = @(), [string]$RootPath = '', [
                         }
                     }
                     if ($jsonBroken) {
+                        $failedOps++
                         Write-Host '  [!] Firefox Preferences содержит повреждённый JSON — запись пропущена, чтобы не затереть настройки.' -ForegroundColor Yellow
                     } else {
                         $prefMap['network.http.http3.enable'] = [PSCustomObject]@{ Value = $false; Status = 'default' }
@@ -339,9 +370,15 @@ function Enable-BrowserFix([string[]]$FilterIds = @(), [string]$RootPath = '', [
                 }
                 if ($ffApplied) { $applied.Add($b.Name) }
             }
-        } catch {}
+        } catch {
+            $failedOps++
+        }
     }
     Update-Z2BrowserMarker $RootPath
+    $script:Z2LastBrowserOpOk = ($failedOps -eq 0)
+    if ($failedOps -gt 0) {
+        Write-Host ("  [X] Не удалось применить политики для части браузеров (ошибок: {0})." -f $failedOps) -ForegroundColor Red
+    }
     if ($applied.Count -gt 0) {
         Write-Host ("  [OK] Применено для: {0}" -f ($applied -join ', ')) -ForegroundColor Green
         Write-Host '       Перезапустите браузер, чтобы отключение QUIC и DoH вступили в силу.' -ForegroundColor Cyan
@@ -350,6 +387,11 @@ function Enable-BrowserFix([string[]]$FilterIds = @(), [string]$RootPath = '', [
 }
 
 function Disable-BrowserFix([bool]$Quiet = $false, [string[]]$FilterIds = @(), [string]$RootPath = '', [bool]$ClearQuic = $true, [bool]$ClearDoh = $true) {
+    $script:Z2LastBrowserOpOk = $false
+    if (-not (Test-Z2IsAdmin)) {
+        Write-Host '  [X] Требуются права администратора для изменения политик браузеров.' -ForegroundColor Red
+        return 0
+    }
     if (-not $RootPath) { $RootPath = $Root }
     $backupObj = Load-Z2BrowserPolicyBackup $RootPath
     $backupBrowsers = Get-Z2ObjProp $backupObj 'Browsers'
@@ -455,10 +497,14 @@ function Disable-BrowserFix([bool]$Quiet = $false, [string[]]$FilterIds = @(), [
         }
     }
     Update-Z2BrowserMarker $RootPath
+    $script:Z2LastBrowserOpOk = ($failedOps -eq 0)
+    if ($failedOps -gt 0) {
+        Write-Host ("  [X] Не удалось сбросить часть политик браузеров (ошибок: {0})." -f $failedOps) -ForegroundColor Red
+    }
     if (-not $Quiet) {
         if ($removed -gt 0) {
             Write-Host '  [OK] Политики QUIC/DoH восстановлены к исходному состоянию. Перезапустите браузер.' -ForegroundColor Green
-        } else {
+        } elseif ($failedOps -eq 0) {
             Write-Host '  [ИНФО] Политики Zapret2 в выбранных браузерах не найдены.' -ForegroundColor Gray
         }
     }
@@ -471,16 +517,28 @@ if ($MyInvocation.InvocationName -ne '.') {
         $idFilter = @($BrowsersCsv -split ',' | ForEach-Object { $_.Trim().ToLowerInvariant() } | Where-Object { $_ })
     }
     if ($Action -eq 'enable') {
+        if (-not (Test-Z2IsAdmin)) {
+            Write-Host '  [X] Требуются права администратора для изменения политик браузеров.' -ForegroundColor Red
+            exit 1
+        }
         [void](Enable-BrowserFix $idFilter $Root)
-        exit 0
+        if ($script:Z2LastBrowserOpOk) { exit 0 } else { exit 1 }
     }
     if ($Action -eq 'revert') {
+        if (-not (Test-Z2IsAdmin)) {
+            Write-Host '  [X] Требуются права администратора для изменения политик браузеров.' -ForegroundColor Red
+            exit 1
+        }
         [void](Disable-BrowserFix $false $idFilter $Root)
-        exit 0
+        if ($script:Z2LastBrowserOpOk) { exit 0 } else { exit 1 }
     }
     if ($Action -eq 'revert-quiet') {
+        if (-not (Test-Z2IsAdmin)) {
+            Write-Host '  [X] Требуются права администратора для изменения политик браузеров.' -ForegroundColor Red
+            exit 1
+        }
         [void](Disable-BrowserFix $true $idFilter $Root)
-        exit 0
+        if ($script:Z2LastBrowserOpOk) { exit 0 } else { exit 1 }
     }
     if ($Action -eq 'status') {
         Show-BrowserStatus

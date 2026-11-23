@@ -10,6 +10,10 @@ $commonPath = Join-Path $PSScriptRoot 'common.ps1'
 if (Test-Path -LiteralPath $commonPath) { . $commonPath }
 $Root = Resolve-Z2Root $Root
 $env:Z2_ROOT = $Root
+if (-not (Test-Z2IsAdmin)) {
+    Write-Host '  [X] Требуются права администратора — запустите от имени администратора.' -ForegroundColor Red
+    exit 1
+}
 
 # Quick silent GitHub release check (1-click auto-update for family/friends)
 if (-not $SkipUpdateCheck) {
@@ -145,7 +149,7 @@ if ($needsMove -and -not $NonInteractive) {
         Start-Sleep -Milliseconds 400
         if (-not (Test-Path -LiteralPath $targetRoot)) { New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null }
         $global:LASTEXITCODE = 0
-        & "$env:SystemRoot\System32\robocopy.exe" ($Root.TrimEnd("\")) ($targetRoot.TrimEnd("\")) /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+        & "$env:SystemRoot\System32\robocopy.exe" (Format-Z2DirNoSlash $Root) (Format-Z2DirNoSlash $targetRoot) /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
         if ($LASTEXITCODE -ge 8) {
             Write-Host "  [!] Ошибка переноса файлов в C:\Zapret2 (robocopy exit=$LASTEXITCODE) — продолжаю из текущей папки." -ForegroundColor Yellow
         } else {
@@ -179,33 +183,45 @@ foreach ($oldDrv in @('WinDivert', 'WinDivert14')) {
 if ($legacyFound.Count -gt 0) {
     Write-Host ("        [OK] Убраны конфликтующие службы Zapret1/DPI: {0}" -f ($legacyFound -join ', ')) -ForegroundColor Green
 }
-& netsh.exe interface tcp set global timestamps=enabled >$null 2>&1
-$rootCleanAcl = $Root.TrimEnd('\')
-if ($rootCleanAcl -notmatch '(?i)\\(Users|Downloads|Desktop|OneDrive|Temp)(\\|$)') {
-    & icacls.exe "$rootCleanAcl" /setowner "*S-1-5-32-544" /T /C /Q >$null 2>&1
-    & icacls.exe "$rootCleanAcl" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" /grant:r "*S-1-5-32-544:(OI)(CI)F" /grant:r "*S-1-5-32-545:(OI)(CI)RX" /T /C /Q >$null 2>&1
+& "$env:SystemRoot\System32\netsh.exe" interface tcp set global timestamps=enabled >$null 2>&1
+$icaclsExe = "$env:SystemRoot\System32\icacls.exe"
+$rootCleanAcl = Format-Z2DirNoSlash $Root
+$asUtils = Join-Path $Root 'utils'
+$asBin   = Join-Path $Root 'bin'
+$asLogs  = Join-Path $asBin 'logs'
+$asExe   = Join-Path $asBin 'tg-ws-proxy.exe'
+$asConf  = Join-Path $asUtils 'tgws_proxy.conf'
+if ($rootCleanAcl.Length -gt 3 -and $rootCleanAcl -notmatch '(?i)\\(Users|Downloads|Desktop|OneDrive|Temp)(\\|$)') {
+    & $icaclsExe "$rootCleanAcl" /setowner "*S-1-5-32-544" /T /C /L /Q >$null 2>&1
+    & $icaclsExe "$rootCleanAcl" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" /grant:r "*S-1-5-32-544:(OI)(CI)F" /grant:r "*S-1-5-32-545:(OI)(CI)RX" /T /C /L /Q >$null 2>&1
     # Restore minimal NetworkService (*S-1-5-20) rights for zapret-tgws
-    $asUtils = Join-Path $rootCleanAcl 'utils'
-    $asBin   = Join-Path $rootCleanAcl 'bin'
-    $asLogs  = Join-Path $asBin 'logs'
-    $asExe   = Join-Path $asBin 'tg-ws-proxy.exe'
-    $asConf  = Join-Path $asUtils 'tgws_proxy.conf'
-    & icacls.exe "$rootCleanAcl" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1
-    if (Test-Path -LiteralPath $asUtils) { & icacls.exe "$asUtils" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
-    if (Test-Path -LiteralPath $asBin)   { & icacls.exe "$asBin"   /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
-    if (Test-Path -LiteralPath $asExe)   { & icacls.exe "$asExe"   /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
-    if (Test-Path -LiteralPath $asConf)  { & icacls.exe "$asConf"  /L /grant:r "*S-1-5-20:(R)"  /Q >$null 2>&1 }
+    & $icaclsExe "$rootCleanAcl" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1
+    if (Test-Path -LiteralPath $asUtils) { & $icaclsExe "$asUtils" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asBin)   { & $icaclsExe "$asBin"   /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asExe)   { & $icaclsExe "$asExe"   /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asConf)  { & $icaclsExe "$asConf"  /L /grant:r "*S-1-5-20:(R)"  /Q >$null 2>&1 }
     if (Test-Path -LiteralPath $asBin) {
         if (-not (Test-Path -LiteralPath $asLogs)) { try { New-Item -ItemType Directory -Path $asLogs -Force | Out-Null } catch {} }
         if (Test-Path -LiteralPath $asLogs) {
-            & icacls.exe "$asLogs" /L /grant:r "*S-1-5-20:(OI)(CI)(M)" /Q >$null 2>&1
+            & $icaclsExe "$asLogs" /L /grant:r "*S-1-5-20:(OI)(CI)(M)" /Q >$null 2>&1
             Get-ChildItem -LiteralPath $asLogs -File -Force -ErrorAction SilentlyContinue | ForEach-Object {
-                if (($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) { & icacls.exe $_.FullName /L /reset /Q >$null 2>&1 }
+                if (($_.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) { & $icaclsExe $_.FullName /L /reset /Q >$null 2>&1 }
             }
         }
     }
+} elseif ($rootCleanAcl.Length -gt 3) {
+    & $icaclsExe "$rootCleanAcl" /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C /L /Q >$null 2>&1
 } else {
-    & icacls.exe "$rootCleanAcl" /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C /Q >$null 2>&1
+    if (Test-Path -LiteralPath $asUtils) { & $icaclsExe "$asUtils" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asBin)   { & $icaclsExe "$asBin"   /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asExe)   { & $icaclsExe "$asExe"   /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asConf)  { & $icaclsExe "$asConf"  /L /grant:r "*S-1-5-20:(R)"  /Q >$null 2>&1 }
+    if (Test-Path -LiteralPath $asBin) {
+        if (-not (Test-Path -LiteralPath $asLogs)) { try { New-Item -ItemType Directory -Path $asLogs -Force | Out-Null } catch {} }
+        if (Test-Path -LiteralPath $asLogs) {
+            & $icaclsExe "$asLogs" /L /grant:r "*S-1-5-20:(OI)(CI)(M)" /Q >$null 2>&1
+        }
+    }
 }
 
 if (-not (Test-Path -LiteralPath $ListsDir)) { New-Item -ItemType Directory -Path $ListsDir -Force | Out-Null }
@@ -225,7 +241,7 @@ $pAuto = Join-Path $ListsDir 'list-auto.txt'
 if (-not (Test-Path -LiteralPath $pAuto)) {
     [System.IO.File]::WriteAllText($pAuto, "", $utf8NoBom)
 }
-& icacls.exe $pAuto /grant "*S-1-5-18:(M)" /grant "*S-1-5-32-544:(M)" >$null 2>&1
+& $icaclsExe $pAuto /L /grant "*S-1-5-18:(M)" /grant "*S-1-5-32-544:(M)" /Q >$null 2>&1
 
 [System.IO.File]::WriteAllText((Join-Path $Root 'utils\autohostlist.enabled'), "1`r`n", $utf8NoBom)
 [System.IO.File]::WriteAllText((Join-Path $Root 'utils\warp_unblock.enabled'), "1`r`n", $utf8NoBom)
@@ -582,7 +598,7 @@ $svcZapret = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
 $winwsProc = Get-Process -Name 'winws2' -ErrorAction SilentlyContinue
 $zapretOk = ($null -ne $svcZapret -and $svcZapret.Status -eq 'Running' -and $null -ne $winwsProc)
 if ($zapretOk) {
-    & reg.exe add "HKLM\System\CurrentControlSet\Services\zapret" /v zapret-discord-youtube /t REG_SZ /d $stratShort /f >$null 2>&1
+    & "$env:SystemRoot\System32\reg.exe" add "HKLM\System\CurrentControlSet\Services\zapret" /v zapret-discord-youtube /t REG_SZ /d $stratShort /f >$null 2>&1
     if (Test-Path -LiteralPath $bakConfA) { Remove-Item -LiteralPath $bakConfA -Force -ErrorAction SilentlyContinue }
     Write-Host "        [OK] Служба 'zapret' установлена и ЗАПУЩЕНА (winws2.exe активен)." -ForegroundColor Green
 } else {

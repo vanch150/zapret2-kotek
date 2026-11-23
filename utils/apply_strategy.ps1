@@ -7,12 +7,27 @@ $ErrorActionPreference = 'Continue'
 
 $commonPath = Join-Path $PSScriptRoot 'common.ps1'
 if (Test-Path -LiteralPath $commonPath) { . $commonPath }
+if (-not (Get-Command Test-Z2IsAdmin -ErrorAction SilentlyContinue)) {
+    function Test-Z2IsAdmin {
+        try {
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $pr = New-Object Security.Principal.WindowsPrincipal($id)
+            return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        } catch { return $false }
+    }
+}
 $Root = if (Get-Command Resolve-Z2Root -ErrorAction SilentlyContinue) {
     Resolve-Z2Root $Root
 } else {
-    if (-not $Root) { $Root = $env:Z2_ROOT }
-    if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
-    $Root.Trim('"', "'", '\', '/') + '\'
+    if ([string]::IsNullOrWhiteSpace($Root)) { $Root = $env:Z2_ROOT }
+    $cleanR = if ($null -ne $Root) { $Root.Trim().Trim('"').Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($cleanR)) { $cleanR = Split-Path -Parent $PSScriptRoot }
+    if ($cleanR -match '^[A-Za-z]:$') { $cleanR += '\' }
+    try { [System.IO.Path]::GetFullPath($cleanR).TrimEnd('\', '/') + '\' } catch { $cleanR.TrimEnd('\', '/') + '\' }
+}
+if (-not (Test-Z2IsAdmin)) {
+    Write-Host '[X] Требуются права администратора для установки стратегии и управления службой zapret.'
+    exit 1
 }
 
 if (-not (Test-Path -LiteralPath $BatPath)) {
@@ -110,7 +125,7 @@ try {
 
     $installedNewService = $startedOk
     if ($installedNewService) {
-        & reg.exe add "HKLM\System\CurrentControlSet\Services\zapret" /v zapret-discord-youtube /t REG_SZ /d $stratShort /f >$null 2>&1
+        & "$env:SystemRoot\System32\reg.exe" add "HKLM\System\CurrentControlSet\Services\zapret" /v zapret-discord-youtube /t REG_SZ /d $stratShort /f >$null 2>&1
         Write-Host "[OK] Установлена стратегия: $batName"
         $exitCode = 0
     } else {

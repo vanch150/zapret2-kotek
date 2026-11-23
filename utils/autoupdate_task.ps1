@@ -6,12 +6,28 @@
     [string]$Mode = 'weekly'
 )
 $ErrorActionPreference = 'SilentlyContinue'
-if (-not $Root) { $Root = $env:Z2_ROOT }
-if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
+if ([string]::IsNullOrWhiteSpace($Root)) { $Root = $env:Z2_ROOT }
+if ([string]::IsNullOrWhiteSpace($Root)) { $Root = Split-Path -Parent $PSScriptRoot }
+$rawRoot = ([string]$Root).Trim().Trim('"')
+if ($rawRoot -match '^[A-Za-z]:$') { $rawRoot = $rawRoot + '\' }
 try {
-    $Root = [System.IO.Path]::GetFullPath($Root.Trim('"', "'")).TrimEnd('\', '/') + '\'
+    $Root = [System.IO.Path]::GetFullPath($rawRoot).TrimEnd('\', '/') + '\'
 } catch {
-    $Root = $Root.Trim('"', "'", '\', '/') + '\'
+    $Root = $rawRoot.TrimEnd('\', '/') + '\'
+}
+
+$_commonPath = Join-Path $PSScriptRoot 'common.ps1'
+if (Test-Path -LiteralPath $_commonPath) {
+    try { . $_commonPath } catch {}
+}
+if (-not (Get-Command Test-Z2IsAdmin -ErrorAction SilentlyContinue)) {
+    function Test-Z2IsAdmin {
+        try {
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $pr = New-Object Security.Principal.WindowsPrincipal($id)
+            return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        } catch { return $false }
+    }
 }
 
 $TaskName   = 'Zapret2KotekAutoUpdate'
@@ -21,14 +37,21 @@ $ValidModes = @('weekly', 'twiceweekly', 'monthly', 'onboot')
 $PsExeFull  = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
 $IcaclsExe  = "$env:SystemRoot\System32\icacls.exe"
 
+function Test-AuTaskExists {
+    try {
+        $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+        if ($null -ne $t) { return $true }
+    } catch {}
+    try {
+        $global:LASTEXITCODE = 0
+        $null = & "$env:SystemRoot\System32\schtasks.exe" /Query /TN $TaskName 2>$null
+        if ($LASTEXITCODE -eq 0) { return $true }
+    } catch {}
+    return $false
+}
+
 if ($Action -eq 'status') {
-    $t = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    $exists = ($null -ne $t)
-    if (-not $exists) {
-        $q = & "$env:SystemRoot\System32\schtasks.exe" /Query /TN $TaskName 2>$null
-        if ($LASTEXITCODE -eq 0) { $exists = $true }
-    }
-    if ($exists) {
+    if (Test-AuTaskExists) {
         $curM = 'weekly'
         if (Test-Path -LiteralPath $ModeFile) {
             $mv = (Get-Content -LiteralPath $ModeFile -TotalCount 1).Trim().ToLowerInvariant()
@@ -42,14 +65,38 @@ if ($Action -eq 'status') {
 }
 
 if ($Action -eq 'disable') {
-    try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
-    & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN $TaskName /F >$null 2>&1
-    Write-Output 'DISABLED'
-    exit 0
+    if (-not (Test-Z2IsAdmin)) {
+        Write-Host "[X] Требуются права администратора для отключения задачи автообновления '$TaskName'." -ForegroundColor Red
+        exit 1
+    }
+    if (-not (Test-AuTaskExists)) {
+        Write-Output 'DISABLED'
+        exit 0
+    }
+    $delOk = $false
+    try {
+        Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction Stop
+        $delOk = $true
+    } catch {}
+    if (-not $delOk -or (Test-AuTaskExists)) {
+        $global:LASTEXITCODE = 0
+        & "$env:SystemRoot\System32\schtasks.exe" /Delete /TN $TaskName /F >$null 2>&1
+        if ($LASTEXITCODE -eq 0) { $delOk = $true }
+    }
+    if ($delOk -and -not (Test-AuTaskExists)) {
+        Write-Output 'DISABLED'
+        exit 0
+    }
+    Write-Host "[X] Не удалось удалить задачу планировщика '$TaskName'." -ForegroundColor Red
+    exit 1
 }
 
 if ($Action -eq 'enable') {
-    $RootTrim = $Root.TrimEnd('\')
+    if (-not (Test-Z2IsAdmin)) {
+        Write-Host "[X] Требуются права администратора для включения задачи автообновления '$TaskName'." -ForegroundColor Red
+        exit 1
+    }
+    $RootTrim = if ($Root.Length -gt 3) { $Root.TrimEnd('\', '/') } else { $Root }
 
     # Refuse registering SYSTEM scheduled task only from temporary/cloud folders (OneDrive / Temp)
     if ($RootTrim -match '(?i)\\(OneDrive|Temp)(\\|$)') {
@@ -59,10 +106,30 @@ if ($Action -eq 'enable') {
 
     try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch {}
 
-    # Inside user profile folders (Desktop/Downloads/etc.) do NOT strip inherited user ACLs (/inheritance:r breaks Explorer/write access);
-    # outside profile folders (e.g. C:\Zapret2) apply full hardened owner & NTFS ACLs.
-    if ($RootTrim -match '(?i)\\Users\\') {
+    $utilsDirAu  = Join-Path $Root 'utils'
+    $binDirAu    = Join-Path $Root 'bin'
+    $tgLogsDirAu = Join-Path $binDirAu 'logs'
+    $tgConfAu    = Join-Path $utilsDirAu 'tgws_proxy.conf'
+    $tgExeAu     = Join-Path $binDirAu 'tg-ws-proxy.exe'
+
+    # Inside user profile folders (Users/Desktop/Downloads) do NOT strip inherited user ACLs (/inheritance:r breaks Explorer/write access);
+    # on a drive root (e.g. D:\) NEVER run recursive /setowner or /inheritance:r across the drive — harden utils\ only;
+    # outside profile folders and drive roots (e.g. C:\Zapret2) apply full hardened owner & NTFS ACLs.
+    if ($RootTrim -match '(?i)\\(Users|Downloads|Desktop)(\\|$)') {
         try { & $IcaclsExe "$RootTrim" /grant "*S-1-5-18:(OI)(CI)F" /grant "*S-1-5-32-544:(OI)(CI)F" /T /C /L /Q >$null 2>&1 } catch {}
+    } elseif ($RootTrim.Length -le 3) {
+        if (Test-Path -LiteralPath $utilsDirAu) {
+            $global:LASTEXITCODE = 0
+            & $IcaclsExe "$utilsDirAu" /setowner "*S-1-5-32-544" /T /C /L /Q >$null 2>&1
+            $ownRc = $LASTEXITCODE
+            $global:LASTEXITCODE = 0
+            & $IcaclsExe "$utilsDirAu" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" /grant:r "*S-1-5-32-544:(OI)(CI)F" /grant:r "*S-1-5-32-545:(OI)(CI)RX" /T /C /L /Q >$null 2>&1
+            $aclRc = $LASTEXITCODE
+            if ($ownRc -ne 0 -or $aclRc -ne 0) {
+                Write-Host "[X] Ошибка защиты прав доступа (icacls owner=$ownRc, acl=$aclRc) — задача SYSTEM не зарегистрирована." -ForegroundColor Red
+                exit 1
+            }
+        }
     } else {
         $global:LASTEXITCODE = 0
         & $IcaclsExe "$RootTrim" /setowner "*S-1-5-32-544" /T /C /L /Q >$null 2>&1
@@ -77,16 +144,11 @@ if ($Action -eq 'enable') {
     }
 
     # Restore minimal NetworkService (*S-1-5-20) rights so zapret-tgws service keeps working
-    $utilsDirAu  = Join-Path $RootTrim 'utils'
-    $binDirAu    = Join-Path $RootTrim 'bin'
-    $tgLogsDirAu = Join-Path $binDirAu 'logs'
-    $tgConfAu    = Join-Path $utilsDirAu 'tgws_proxy.conf'
-    $tgExeAu     = Join-Path $binDirAu 'tg-ws-proxy.exe'
-    try { & $IcaclsExe "$RootTrim"   /grant "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
-    if (Test-Path -LiteralPath $utilsDirAu) { try { & $IcaclsExe "$utilsDirAu" /grant "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {} }
-    if (Test-Path -LiteralPath $binDirAu)   { try { & $IcaclsExe "$binDirAu"   /grant "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {} }
-    if (Test-Path -LiteralPath $tgExeAu)    { try { & $IcaclsExe "$tgExeAu"    /grant "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {} }
-    if (Test-Path -LiteralPath $tgConfAu)   { try { & $IcaclsExe "$tgConfAu"   /grant "*S-1-5-20:(R)"  /Q >$null 2>&1 } catch {} }
+    try { & $IcaclsExe "$RootTrim" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {}
+    if (Test-Path -LiteralPath $utilsDirAu) { try { & $IcaclsExe "$utilsDirAu" /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {} }
+    if (Test-Path -LiteralPath $binDirAu)   { try { & $IcaclsExe "$binDirAu"   /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {} }
+    if (Test-Path -LiteralPath $tgExeAu)    { try { & $IcaclsExe "$tgExeAu"    /L /grant:r "*S-1-5-20:(RX)" /Q >$null 2>&1 } catch {} }
+    if (Test-Path -LiteralPath $tgConfAu)   { try { & $IcaclsExe "$tgConfAu"   /L /grant:r "*S-1-5-20:(R)"  /Q >$null 2>&1 } catch {} }
     if (Test-Path -LiteralPath $binDirAu) {
         if (-not (Test-Path -LiteralPath $tgLogsDirAu)) {
             try { New-Item -ItemType Directory -Path $tgLogsDirAu -Force | Out-Null } catch {}
@@ -106,7 +168,7 @@ if ($Action -eq 'enable') {
         }
     }
 
-    $argsStr = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Root `"$RootTrim`" -Silent"
+    $argsStr = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$ScriptPath`" -Silent"
     $ok = $false
     try {
         $act  = New-ScheduledTaskAction -Execute $PsExeFull -Argument $argsStr -WorkingDirectory $RootTrim
@@ -136,22 +198,29 @@ if ($Action -eq 'enable') {
         $ok = $false
     }
     if (-not $ok) {
-        $tr = "`"$PsExeFull`" $argsStr"
+        $argsStrEsc = $argsStr.Replace('"', '\"')
+        $trArg = "/TR `"\`"$PsExeFull\`" $argsStrEsc`""
         if ($Mode -eq 'onboot') {
-            & "$env:SystemRoot\System32\schtasks.exe" /Create /TN $TaskName /SC ONSTART /DELAY 0000:30 /RL HIGHEST /RU SYSTEM /F /TR ($tr.Replace('"', '\"')) >$null 2>&1
+            $schArgs = "/Create /TN `"$TaskName`" /SC ONSTART /DELAY 0000:30 /RL HIGHEST /RU SYSTEM /F $trArg"
         } elseif ($Mode -eq 'twiceweekly') {
-            & "$env:SystemRoot\System32\schtasks.exe" /Create /TN $TaskName /SC WEEKLY /D WED,SUN /ST 04:00 /RL HIGHEST /RU SYSTEM /F /TR ($tr.Replace('"', '\"')) >$null 2>&1
+            $schArgs = "/Create /TN `"$TaskName`" /SC WEEKLY /D WED,SUN /ST 04:00 /RL HIGHEST /RU SYSTEM /F $trArg"
         } elseif ($Mode -eq 'monthly') {
-            & "$env:SystemRoot\System32\schtasks.exe" /Create /TN $TaskName /SC MONTHLY /D 1 /ST 04:00 /RL HIGHEST /RU SYSTEM /F /TR ($tr.Replace('"', '\"')) >$null 2>&1
+            $schArgs = "/Create /TN `"$TaskName`" /SC MONTHLY /D 1 /ST 04:00 /RL HIGHEST /RU SYSTEM /F $trArg"
         } else {
-            & "$env:SystemRoot\System32\schtasks.exe" /Create /TN $TaskName /SC WEEKLY /D SUN /ST 04:00 /RL HIGHEST /RU SYSTEM /F /TR ($tr.Replace('"', '\"')) >$null 2>&1
+            $schArgs = "/Create /TN `"$TaskName`" /SC WEEKLY /D SUN /ST 04:00 /RL HIGHEST /RU SYSTEM /F $trArg"
         }
-        if ($LASTEXITCODE -eq 0) { $ok = $true }
+        try {
+            $proc = Start-Process -FilePath "$env:SystemRoot\System32\schtasks.exe" -ArgumentList $schArgs -WindowStyle Hidden -Wait -PassThru
+            if ($null -ne $proc -and $proc.ExitCode -eq 0) { $ok = $true }
+        } catch {
+            $ok = $false
+        }
     }
     if ($ok) {
         [System.IO.File]::WriteAllText($ModeFile, $Mode, (New-Object System.Text.UTF8Encoding($false)))
         Write-Output "ENABLED:$Mode"
         exit 0
     }
+    Write-Host "[X] Не удалось зарегистрировать задачу планировщика '$TaskName'." -ForegroundColor Red
     exit 1
 }

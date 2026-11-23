@@ -2,7 +2,10 @@
 chcp 65001 > nul
 set "PS_EXE=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
 for %%I in ("%~dp0..") do set "Z2_ROOT=%%~fI"
-set "Z2_BASE=%Z2_ROOT%\"
+set "Z2_BASE=%Z2_ROOT%"
+if not "%Z2_BASE:~-1%"=="\" set "Z2_BASE=%Z2_BASE%\"
+set "Z2_ROOT_ARG=%Z2_ROOT%"
+if "%Z2_ROOT_ARG:~-1%"=="\" set "Z2_ROOT_ARG=%Z2_ROOT_ARG%\"
 set "LOCAL_VERSION=1.1.1"
 if exist "%Z2_BASE%utils\version.txt" set /p LOCAL_VERSION=<"%Z2_BASE%utils\version.txt"
 
@@ -46,20 +49,20 @@ echo Requesting administrator rights...
 set "Z2_SELF=%~f0"
 set "Z2_DIR=%Z2_ROOT%"
 if defined Z2_FORCE_CLI (set "Z2_ARG=admin --cli") else (set "Z2_ARG=admin")
-"%PS_EXE%" -NoProfile -Command "Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList ('/d /s /c \"\"' + $env:Z2_SELF + '\" ' + $env:Z2_ARG + '\"') -WorkingDirectory $env:Z2_DIR -Verb RunAs"
+"%PS_EXE%" -NoProfile -Command "Start-Process -FilePath ($env:SystemRoot + '\System32\cmd.exe') -ArgumentList ('/d /s /c \"\"' + ($env:Z2_SELF.Replace([string][char]37, '\"^' + [char]37 + '\"')) + '\" ' + $env:Z2_ARG + '\"') -WorkingDirectory $env:Z2_DIR -Verb RunAs"
 exit /b
 
 :init_admin
 call :load_user_lists
 if defined Z2_FORCE_CLI (
-    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%Z2_BASE%utils\cli_menu.ps1" -Root "%Z2_ROOT%"
+    "%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%Z2_BASE%utils\cli_menu.ps1" -Root "%Z2_ROOT_ARG%"
     exit /b
 )
 if exist "%Z2_BASE%utils\gui_app.ps1" (
-    start "" "%PS_EXE%" -STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%Z2_BASE%utils\gui_app.ps1" -Root "%Z2_ROOT%"
+    start "" "%PS_EXE%" -STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%Z2_BASE%utils\gui_app.ps1" -Root "%Z2_ROOT_ARG%"
     exit /b
 )
-"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%Z2_BASE%utils\cli_menu.ps1" -Root "%Z2_ROOT%"
+"%PS_EXE%" -NoProfile -ExecutionPolicy Bypass -File "%Z2_BASE%utils\cli_menu.ps1" -Root "%Z2_ROOT_ARG%"
 exit /b
 
 :: =====================================================================

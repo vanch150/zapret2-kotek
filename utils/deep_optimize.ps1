@@ -8,6 +8,10 @@ $ErrorActionPreference = 'Continue'
 $commonPath = Join-Path $PSScriptRoot 'common.ps1'
 if (Test-Path -LiteralPath $commonPath) { . $commonPath }
 $Root = Resolve-Z2Root $Root
+if (-not (Test-Z2IsAdmin)) {
+    Write-Host '  [X] Требуются права администратора — запустите от имени администратора.' -ForegroundColor Red
+    exit 1
+}
 
 $TestTargets = @(Get-Z2Targets -Root $Root -Mode 'ALL')
 $TestUrls = @($TestTargets | ForEach-Object { $_.Url })
@@ -556,7 +560,7 @@ try {
         $installedNewService = $startedOk
         if ($startedOk) {
             $stratShort = [System.IO.Path]::GetFileNameWithoutExtension($installBat)
-            & reg.exe add "HKLM\System\CurrentControlSet\Services\zapret" /v zapret-discord-youtube /t REG_SZ /d $stratShort /f >$null 2>&1
+            & "$env:SystemRoot\System32\reg.exe" add "HKLM\System\CurrentControlSet\Services\zapret" /v zapret-discord-youtube /t REG_SZ /d $stratShort /f >$null 2>&1
             if (Test-Path -LiteralPath $bakLiveConf) { Remove-Item -LiteralPath $bakLiveConf -Force -ErrorAction SilentlyContinue }
             Write-Host "  [OK] Служба zapret переведена на $installName и запущена!" -ForegroundColor Green
         } else {

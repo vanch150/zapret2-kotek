@@ -9,6 +9,10 @@ $ErrorActionPreference = 'Continue'
 $commonPath = Join-Path $PSScriptRoot 'common.ps1'
 if (Test-Path -LiteralPath $commonPath) { . $commonPath }
 $Root = Resolve-Z2Root $Root
+if (-not (Test-Z2IsAdmin)) {
+    Write-Host '[X] Требуются права администратора для тестирования стратегии.'
+    exit 1
+}
 
 if (-not (Test-Path -LiteralPath $BatPath)) {
     Write-Host "[X] Стратегия не найдена: $BatPath"

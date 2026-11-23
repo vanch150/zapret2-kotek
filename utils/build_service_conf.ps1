@@ -3,7 +3,7 @@ $q = [char]34
 
 function ConvertTo-NormPath([string]$p) {
     if ([string]::IsNullOrWhiteSpace($p)) { return $p }
-    $s = $p.Trim('"', "'")
+    $s = $p.Trim().Trim('"').Trim()
     $hadTrail = $s.EndsWith('\') -or $s.EndsWith('/')
     if ($s -match '^[A-Za-z]:[/\\]' -or $s.Contains('..')) {
         try {
@@ -27,7 +27,8 @@ foreach ($k in @('BIN','LISTS','LUA','GameFilterTCP','GameFilterUDP','GameFilter
     }
 }
 if ($env:Z2_ROOT) {
-    $normR = ConvertTo-NormPath ($env:Z2_ROOT.Trim('"', "'").TrimEnd('\', '/') + '\')
+    $z2RootClean = $env:Z2_ROOT.Trim().Trim('"').Trim().TrimEnd('\', '/') + '\'
+    $normR = ConvertTo-NormPath $z2RootClean
     $vars['ROOT'] = $normR
     $vars['~dp0'] = $normR
 }
@@ -60,11 +61,12 @@ foreach ($l in $raw) {
 if ($buf) { $lines += $buf }
 
 function Exp([string]$s) {
-    if ($vars.ContainsKey('~dp0')) {
-        $s = [regex]::Replace($s, '(?i)%~dp0', { param($m) $vars['~dp0'] })
-    }
-    return [regex]::Replace($s, '%([A-Za-z0-9_~]+)%', {
+    return [regex]::Replace($s, '(?i)%~dp0|%([A-Za-z0-9_~]+)%', {
         param($m)
+        if ($m.Value -ieq '%~dp0') {
+            if ($vars.ContainsKey('~dp0')) { return $vars['~dp0'] }
+            return $m.Value
+        }
         $k = $m.Groups[1].Value
         if ($vars.ContainsKey($k)) { return $vars[$k] }
         $ev = [Environment]::GetEnvironmentVariable($k)
@@ -187,7 +189,11 @@ foreach ($tk in $tokens) {
 if ($curProf.Count -gt 0) { $profiles.Add($curProf) }
 
 $rootWin = if ($env:Z2_ROOT) {
-    try { [System.IO.Path]::GetFullPath($env:Z2_ROOT.Trim('"', "'")).TrimEnd('\', '/') + '\' } catch { $env:Z2_ROOT.Trim('"', "'").TrimEnd('\', '/') + '\' }
+    $rwClean = $env:Z2_ROOT.Trim().Trim('"').Trim()
+    if ($rwClean -match '^[A-Za-z]:$') { $rwClean += '\' }
+    if ($rwClean) {
+        try { [System.IO.Path]::GetFullPath($rwClean).TrimEnd('\', '/') + '\' } catch { $rwClean.TrimEnd('\', '/') + '\' }
+    } else { '' }
 } else { '' }
 
 # 0. WARP Unblock toggle check
@@ -588,7 +594,7 @@ for ($i = 0; $i -lt $activeProfiles.Count; $i++) {
 
 $out = foreach ($tk in $finalTokens) {
     if ($tk -match '[\s\x27\x22(){}\[\]*?~]') {
-        $q + ($tk -replace '"', '\"') + $q
+        $q + ($tk -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + $q
     } else {
         $tk
     }

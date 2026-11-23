@@ -8,6 +8,10 @@ $ErrorActionPreference = 'SilentlyContinue'
 $commonPath = Join-Path $PSScriptRoot 'common.ps1'
 if (Test-Path -LiteralPath $commonPath) { . $commonPath }
 $Root = Resolve-Z2Root $Root
+if (-not (Test-Z2IsAdmin)) {
+    Write-Host '  [X] Требуются права администратора для подбора и смены UDP-фейка.' -ForegroundColor Red
+    exit 1
+}
 $BinDir = Join-Path $Root 'bin'
 $LuaDir = Join-Path $Root 'lua'
 $WinwsExe = Join-Path $BinDir 'winws2.exe'
@@ -241,9 +245,17 @@ while ($true) {
             if (Set-ActiveUdpFake $sel.File) {
                 Write-Host "  [OK] Установлен $($sel.File) в ACTIVE_DISCORD_UDP.bin и ACTIVE_GAME_UDP.bin" -ForegroundColor Green
                 $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
-                if ($svc -and $svc.Status -eq 'Running') {
-                    Restart-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
-                    Write-Host "  [OK] Служба 'zapret' перезапущена." -ForegroundColor Green
+                if ($null -ne $svc) {
+                    try {
+                        if ($svc.Status -eq 'Running') {
+                            Restart-Service -Name 'zapret' -Force -ErrorAction Stop
+                            Write-Host "  [OK] Служба 'zapret' перезапущена." -ForegroundColor Green
+                        }
+                    } catch {
+                        Write-Host ("  [X] Не удалось перезапустить службу 'zapret': {0}" -f $_.Exception.Message) -ForegroundColor Red
+                    } finally {
+                        try { $svc.Dispose() } catch {}
+                    }
                 }
             }
         }
@@ -259,12 +271,21 @@ while ($true) {
         $idx = 0
         if ([int]::TryParse($pick, [ref]$idx) -and $idx -ge 1 -and $idx -le $allBins.Count) {
             $chosen = $allBins[$idx - 1].Name
-            Set-ActiveUdpFake $chosen | Out-Null
-            Write-Host "  [OK] Установлен $chosen в ACTIVE_DISCORD_UDP.bin и ACTIVE_GAME_UDP.bin" -ForegroundColor Green
-            $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
-            if ($svc -and $svc.Status -eq 'Running') {
-                Restart-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
-                Write-Host "  [OK] Служба 'zapret' перезапущена." -ForegroundColor Green
+            if (Set-ActiveUdpFake $chosen) {
+                Write-Host "  [OK] Установлен $chosen в ACTIVE_DISCORD_UDP.bin и ACTIVE_GAME_UDP.bin" -ForegroundColor Green
+                $svc = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+                if ($null -ne $svc) {
+                    try {
+                        if ($svc.Status -eq 'Running') {
+                            Restart-Service -Name 'zapret' -Force -ErrorAction Stop
+                            Write-Host "  [OK] Служба 'zapret' перезапущена." -ForegroundColor Green
+                        }
+                    } catch {
+                        Write-Host ("  [X] Не удалось перезапустить службу 'zapret': {0}" -f $_.Exception.Message) -ForegroundColor Red
+                    } finally {
+                        try { $svc.Dispose() } catch {}
+                    }
+                }
             }
         }
         Read-Host "`n  Нажмите Enter для продолжения"

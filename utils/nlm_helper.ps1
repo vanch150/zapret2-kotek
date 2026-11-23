@@ -21,8 +21,9 @@ function Get-Z2NetAdaptersInfo {
     $list = New-Object System.Collections.Generic.List[object]
     $seenIdx = New-Object System.Collections.Generic.HashSet[int]
     $gotNetAdapter = $false
+    $errBefore = $Error.Count
     try {
-        $ads = @(Get-NetAdapter -IncludeHidden:$false -ErrorAction Stop)
+        $ads = @(Get-NetAdapter -IncludeHidden:$false -ErrorAction Ignore)
         if ($ads.Count -gt 0) { $gotNetAdapter = $true }
         foreach ($ad in $ads) {
             $idx = 0
@@ -51,7 +52,9 @@ function Get-Z2NetAdaptersInfo {
                 KindLabel    = $kindLbl
             })
         }
-    } catch {}
+    } catch {} finally {
+        while ($Error.Count -gt $errBefore) { $Error.RemoveAt(0) }
+    }
 
     # Always supplement with .NET NetworkInterface (catches RAS/PPPoE interfaces hidden from Get-NetAdapter; full fallback if Get-NetAdapter failed)
     try {

@@ -511,6 +511,26 @@ namespace ZapretTgWsProxy
             return false;
         }
 
+        private static bool IsOsTls13Unsupported(Exception ex)
+        {
+            HashSet<Exception> seen = new HashSet<Exception>();
+            Exception cur = ex;
+            while (cur != null && seen.Add(cur))
+            {
+                if (cur is ArgumentException || cur is NotSupportedException)
+                    return true;
+                System.ComponentModel.Win32Exception wex = cur as System.ComponentModel.Win32Exception;
+                if (wex != null && !(wex is SocketException))
+                {
+                    int code = wex.NativeErrorCode;
+                    if (code == unchecked((int)0x80090302) || code == 50)
+                        return true;
+                }
+                cur = cur.InnerException;
+            }
+            return false;
+        }
+
         public static Task<RawWebSocket> ConnectAsync(
             string targetHost, int port, string hostHeader, string path,
             string sniHost, bool secure, int bufferSize, int timeoutMs, string routeLabel)
@@ -588,7 +608,7 @@ namespace ZapretTgWsProxy
                     catch (System.ComponentModel.Win32Exception wex)
                     {
                         if (!tryTls13 || certValidationFailed || (wex is SocketException)) throw;
-                        _tls13Supported = false;
+                        if (IsOsTls13Unsupported(wex)) _tls13Supported = false;
                         fallbackTls12 = true;
                         needReconnect = true;
                     }
@@ -596,14 +616,14 @@ namespace ZapretTgWsProxy
                     {
                         if (!tryTls13 || certValidationFailed || !(ioEx.InnerException is System.ComponentModel.Win32Exception) || (ioEx.InnerException is SocketException))
                             throw;
-                        _tls13Supported = false;
+                        if (IsOsTls13Unsupported(ioEx)) _tls13Supported = false;
                         fallbackTls12 = true;
                         needReconnect = true;
                     }
-                    catch (System.Security.Authentication.AuthenticationException)
+                    catch (System.Security.Authentication.AuthenticationException authEx)
                     {
                         if (!tryTls13 || certValidationFailed) throw;
-                        _tls13Supported = false;
+                        if (IsOsTls13Unsupported(authEx)) _tls13Supported = false;
                         fallbackTls12 = true;
                         needReconnect = true;
                     }
@@ -2262,25 +2282,18 @@ namespace ZapretTgWsProxy
             string ip3 = CleanCfAnycastIps[2]; // 104.18.32.47
             string ip4 = CleanCfAnycastIps[3]; // 172.64.155.209
 
-            // Stage 1: race TLS WSS :443 candidates first to prevent plaintext ws://:80 downgrade
+            List<CfRouteSpec> specs = new List<CfRouteSpec>();
             if (!DisableSecure)
             {
-                List<CfRouteSpec> wssSpecs = new List<CfRouteSpec>();
-                wssSpecs.Add(new CfRouteSpec(ip1, 443, true, null, dom1, "cf-clean-wss"));
-                wssSpecs.Add(new CfRouteSpec(ip4, 443, true, null, dom2, "cf-clean-wss"));
-                wssSpecs.Add(new CfRouteSpec(null, 443, true, null, dom1, "cf-dns-wss"));
-                RawWebSocket wssWinner = await RaceCfCandidateGroupAsync(normDc, wssSpecs, timeoutMs, ct).ConfigureAwait(false);
-                if (wssWinner != null || ct.IsCancellationRequested)
-                    return wssWinner;
-                Log("INFO", "All Cloudflare WSS :443 routes failed; trying HTTP WS :80 fallback.");
+                specs.Add(new CfRouteSpec(ip1, 443, true, null, dom1, "cf-clean-wss"));
+                specs.Add(new CfRouteSpec(ip4, 443, true, null, dom2, "cf-clean-wss"));
+                specs.Add(new CfRouteSpec(null, 443, true, null, dom1, "cf-dns-wss"));
             }
-
-            // Stage 2: only try plaintext HTTP WS :80 if DisableSecure or all WSS :443 attempts failed
-            List<CfRouteSpec> ws80Specs = new List<CfRouteSpec>();
-            ws80Specs.Add(new CfRouteSpec(ip1, 80, false, null, dom1, "cf-clean-ws80"));
-            ws80Specs.Add(new CfRouteSpec(ip3, 80, false, null, dom2, "cf-clean-ws80"));
-            ws80Specs.Add(new CfRouteSpec(null, 80, false, null, dom2, "cf-dns-ws80"));
-            return await RaceCfCandidateGroupAsync(normDc, ws80Specs, timeoutMs, ct).ConfigureAwait(false);
+            // Equal-footing race of ws://:80 and wss://:443 without delay against 16 KB TSPU cutoff
+            specs.Add(new CfRouteSpec(ip1, 80, false, null, dom1, "cf-clean-ws80"));
+            specs.Add(new CfRouteSpec(ip3, 80, false, null, dom2, "cf-clean-ws80"));
+            specs.Add(new CfRouteSpec(null, 80, false, null, dom2, "cf-dns-ws80"));
+            return await RaceCfCandidateGroupAsync(normDc, specs, timeoutMs, ct).ConfigureAwait(false);
         }
 
         private async Task AcceptLoopAsync(CancellationToken ct)

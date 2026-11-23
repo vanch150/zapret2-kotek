@@ -28,23 +28,56 @@ function Read-Z2Domains([string]$Path) {
     return $res
 }
 
-function Normalize-Z2Domain([string]$Dom) {
-    return ($Dom.Trim().TrimStart('^', '!', '.')).ToLowerInvariant()
+function Normalize-Z2ListEntry([string]$Dom) {
+    if ([string]::IsNullOrWhiteSpace($Dom)) { return '' }
+    $s = $Dom.Trim().TrimStart('!').Trim()
+    $exact = ''
+    if ($s.StartsWith('^')) {
+        $exact = '^'
+        $s = $s.Substring(1).TrimStart('!')
+    }
+    $s = $s.Trim().Trim('.').ToLowerInvariant()
+    if (-not $s) { return '' }
+    return ($exact + $s)
 }
 
 function Test-Z2DomainCovered([string]$Candidate, [string[]]$RuleList) {
-    $c = Normalize-Z2Domain $Candidate
+    if ([string]::IsNullOrWhiteSpace($Candidate)) { return $false }
+    $c = (Normalize-Z2ListEntry $Candidate).TrimStart('^').Trim('.')
     if (-not $c) { return $false }
     foreach ($r in $RuleList) {
-        if ($c -eq $r -or $c.EndsWith('.' + $r)) { return $true }
+        if ([string]::IsNullOrEmpty($r)) { continue }
+        if ($r.StartsWith('^')) {
+            $rBare = $r.Substring(1)
+            if ($rBare -and $c -eq $rBare) { return $true }
+        } else {
+            if ($c -eq $r -or $c.EndsWith('.' + $r)) { return $true }
+        }
     }
     return $false
+}
+
+function Get-Z2DedupKey([string]$Entry) {
+    if ([string]::IsNullOrWhiteSpace($Entry)) { return '' }
+    $s = ($Entry -replace '\s*#.*$', '').Trim()
+    if (-not $s) { return '' }
+    $prefix = ''
+    if ($s -match '^([!^]+)(.*)$') {
+        $prefix = $matches[1]
+        $s = $matches[2]
+    }
+    $s = $s.Trim().Trim('.').ToLowerInvariant()
+    if (-not $s) { return '' }
+    return ($prefix + $s)
 }
 
 function Deduplicate-Z2UserFile([string]$UserPath, [string]$SysPath, [string]$DefaultHeader) {
     if (-not (Test-Path -LiteralPath $UserPath) -or -not (Test-Path -LiteralPath $SysPath)) { return }
     $sysSet = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
-    foreach ($s in (Read-Z2Domains $SysPath)) { [void]$sysSet.Add($s) }
+    foreach ($s in (Read-Z2Domains $SysPath)) {
+        $k = Get-Z2DedupKey $s
+        if ($k) { [void]$sysSet.Add($k) }
+    }
     if ($sysSet.Count -eq 0) { return }
 
     $rawLines = @(Get-Content -LiteralPath $UserPath -Encoding UTF8 -ErrorAction SilentlyContinue)
@@ -56,11 +89,11 @@ function Deduplicate-Z2UserFile([string]$UserPath, [string]$SysPath, [string]$De
         $tr = $line.Trim()
         if (-not $tr) { continue }
         if ($tr.StartsWith('#')) { $out.Add($tr); continue }
-        # Strip inline comments when checking duplicates so "domain.com # note" deduplicates properly
-        $cleanVal = ($tr -replace '\s*#.*$', '').Trim()
-        if (-not $cleanVal) { continue }
-        if ($sysSet.Contains($cleanVal)) { $changed = $true; continue }
-        if ($seen.Add($cleanVal)) { $out.Add($tr) } else { $changed = $true }
+        # Strip inline comments and normalize dot/case for comparison while preserving original trimmed line
+        $key = Get-Z2DedupKey $tr
+        if (-not $key) { continue }
+        if ($sysSet.Contains($key)) { $changed = $true; continue }
+        if ($seen.Add($key)) { $out.Add($tr) } else { $changed = $true }
     }
     if ($changed) {
         if ($out.Count -eq 0 -and $DefaultHeader) { $out.Add($DefaultHeader) }
@@ -75,20 +108,12 @@ Deduplicate-Z2UserFile $usrIpExPath $sysIpExPath '# Свои IP/подсети-�
 # 1. Build list-exclude.effective.txt = list-exclude.txt MINUS user overrides from list-general-user.txt
 # Only exact matches or subdomains of user-added domain are removed (never strip parent domains like yandex.ru!)
 $usrGenRaw = Read-Z2Domains $usrGenPath
-$usrGenNorm = @($usrGenRaw | Where-Object { -not $_.StartsWith('!') } | ForEach-Object { Normalize-Z2Domain $_ } | Where-Object { $_ } | Select-Object -Unique)
+$usrGenNorm = @($usrGenRaw | Where-Object { -not $_.StartsWith('!') } | ForEach-Object { Normalize-Z2ListEntry $_ } | Where-Object { $_ } | Select-Object -Unique)
 
 $sysExRaw = Read-Z2Domains $sysExPath
 $effLines = New-Object System.Collections.Generic.List[string]
 foreach ($d in $sysExRaw) {
-    $dn = Normalize-Z2Domain $d
-    $overridden = $false
-    foreach ($ug in $usrGenNorm) {
-        if ($dn -eq $ug -or $dn.EndsWith('.' + $ug)) {
-            $overridden = $true
-            break
-        }
-    }
-    if (-not $overridden) { $effLines.Add($d) }
+    if (-not (Test-Z2DomainCovered $d $usrGenNorm)) { $effLines.Add($d) }
 }
 if ($sysExRaw.Count -gt 0) { [System.IO.File]::WriteAllLines($effExPath, $effLines, $utf8NoBom) }
 
@@ -97,7 +122,7 @@ if (Test-Path -LiteralPath $autoPath) {
     $autoRaw = Read-Z2Domains $autoPath
     if ($autoRaw.Count -gt 0) {
         $usrExRaw = Read-Z2Domains $usrExPath
-        $allExNorm = @(($effLines.ToArray() + @($usrExRaw)) | ForEach-Object { Normalize-Z2Domain $_ } | Where-Object { $_ } | Select-Object -Unique)
+        $allExNorm = @(($effLines.ToArray() + @($usrExRaw)) | Where-Object { -not $_.StartsWith('!') } | ForEach-Object { Normalize-Z2ListEntry $_ } | Where-Object { $_ } | Select-Object -Unique)
         $cleanAuto = New-Object System.Collections.Generic.List[string]
         $seenAuto = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
         $changed = $false

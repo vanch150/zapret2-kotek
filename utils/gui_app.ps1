@@ -283,7 +283,7 @@ $CmbAutoUpdMode  = $win.FindName('CmbAutoUpdMode')
 $CmbIpsetMode    = $win.FindName('CmbIpsetMode')
 $TxtAutoUpdDesc  = $win.FindName('TxtAutoUpdDesc')
 
-$TxtFolder.Text = $Root.TrimEnd('\')
+$TxtFolder.Text = Format-Z2DirNoSlash $Root
 function Load-KotekSprite([string]$FileName) {
     $fp = Join-Path $Root ("utils\$FileName")
     if (-not (Test-Path -LiteralPath $fp)) { return $null }
@@ -742,6 +742,12 @@ function Show-Toast([string]$Msg, [bool]$IsError = $false) {
     $StatusRow.Visibility = 'Collapsed'
     $script:ToastHideTick = $script:CatIdx + 14
 }
+function Test-Z2GuiAdmin([switch]$RefreshUi) {
+    if (Test-Z2IsAdmin) { return $true }
+    Show-Toast 'Требуются права администратора — запусти !_START_KOTEK.bat от имени администратора.' $true
+    if ($RefreshUi) { Refresh-Dashboard }
+    return $false
+}
 if ($null -ne $BtnAutoDoneDismiss) { $BtnAutoDoneDismiss.Add_Click({ $AutoDoneCard.Visibility = 'Collapsed' }) }
 $BtnAutoDoneDeep.Add_Click({
     $AutoDoneCard.Visibility = 'Collapsed'
@@ -784,9 +790,16 @@ if ($null -ne $BtnCancelHybrid) {
         } @{ RootDir = $Root } {
             param($res, $err)
             Refresh-Dashboard
-            $keepMsg = "Гибрид отменён — оставлена стратегия $($script:ActiveStratName)"
-            Set-Status $keepMsg $AccentLightHex
-            Show-Toast $keepMsg $false
+            $ok = ($res -is [System.Collections.IList] -and $res.Count -gt 0 -and [bool]$res[0]) -or ($res -eq $true)
+            if ($ok) {
+                $keepMsg = "Гибрид отменён — оставлена стратегия $($script:ActiveStratName)"
+                Set-Status $keepMsg $AccentLightHex
+                Show-Toast $keepMsg $false
+            } else {
+                $failMsg = 'Гибрид отменён, но не удалось запустить службу zapret — проверь права или запусти вручную.'
+                Set-Status $failMsg '#D97777'
+                Show-Toast $failMsg $true
+            }
         }
     })
 }
@@ -804,6 +817,7 @@ function Sync-AutoDoneUpdBtn {
     }
 }
 $BtnAutoDoneAutoUpd.Add_Click({
+    if (-not (Test-Z2GuiAdmin)) { return }
     $auScript = Join-Path $Root 'utils\autoupdate_task.ps1'
     $selIdx = [Math]::Max(0, [Math]::Min($CmbAutoUpdMode.SelectedIndex, $script:AutoUpdKeys.Count - 1)); $selM = $script:AutoUpdKeys[$selIdx]
     $turnOn = -not [bool]$ChkAutoUpdate.IsChecked
@@ -821,10 +835,17 @@ $BtnAutoDoneAutoUpd.Add_Click({
             Show-Toast "Автообновление включено: $mTxt" $false
         }
     } else {
+        $global:LASTEXITCODE = 0
         & $auScript -Action disable -Root $Root | Out-Null
-        $ChkAutoUpdate.IsChecked = $false
-        $CmbAutoUpdMode.IsEnabled = $false
-        Show-Toast 'Автообновление отключено.' $false
+        if ($LASTEXITCODE -ne 0 -or $null -ne (Get-Z2AutoUpdateTask)) {
+            $ChkAutoUpdate.IsChecked = $true
+            $CmbAutoUpdMode.IsEnabled = $true
+            Show-Toast 'Не удалось отключить автообновление — проверь права администратора.' $true
+        } else {
+            $ChkAutoUpdate.IsChecked = $false
+            $CmbAutoUpdMode.IsEnabled = $false
+            Show-Toast 'Автообновление отключено.' $false
+        }
     }
     Sync-AutoDoneUpdBtn
 })
@@ -1416,20 +1437,41 @@ function Refresh-Dashboard {
 
 $CmbUdpFake.Add_SelectionChanged({
     if ($script:SuppressUdpEvent) { return }
+    if (-not (Test-Z2GuiAdmin -RefreshUi)) { return }
     $sel = [string]$CmbUdpFake.SelectedItem
     if ([string]::IsNullOrWhiteSpace($sel)) { return }
     $src = Join-Path (Join-Path $Root 'bin') $sel
     if (Test-Path -LiteralPath $src) {
-        Copy-Item -LiteralPath $src -Destination (Join-Path $Root 'bin\ACTIVE_DISCORD_UDP.bin') -Force
-        Copy-Item -LiteralPath $src -Destination (Join-Path $Root 'bin\ACTIVE_GAME_UDP.bin') -Force
-        [System.IO.File]::WriteAllText((Join-Path $Root 'utils\active_udp_fake.txt'), $sel, (New-Object System.Text.UTF8Encoding($false)))
+        try {
+            Copy-Item -LiteralPath $src -Destination (Join-Path $Root 'bin\ACTIVE_DISCORD_UDP.bin') -Force -ErrorAction Stop
+            Copy-Item -LiteralPath $src -Destination (Join-Path $Root 'bin\ACTIVE_GAME_UDP.bin') -Force -ErrorAction Stop
+            [System.IO.File]::WriteAllText((Join-Path $Root 'utils\active_udp_fake.txt'), $sel, (New-Object System.Text.UTF8Encoding($false)))
+        } catch {
+            Show-Toast "Не удалось сохранить UDP-фейк: $($_.Exception.Message)" $true
+            Refresh-Dashboard
+            return
+        }
         if ($null -ne $TxtUdpCurrent) { $TxtUdpCurrent.Text = "Сейчас: $sel" }
         $svcZ = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
-        if ($null -ne $svcZ -and $svcZ.Status -eq 'Running') {
-            Restart-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
+        $restartOk = $true
+        if ($null -ne $svcZ) {
+            try {
+                if ($svcZ.Status -eq 'Running') {
+                    Restart-Service -Name 'zapret' -Force -ErrorAction Stop
+                }
+            } catch {
+                $restartOk = $false
+                Show-Toast "UDP-фейк обновлён, но не удалось перезапустить службу zapret: $($_.Exception.Message)" $true
+            } finally {
+                try { $svcZ.Dispose() } catch {}
+            }
         }
         $TxtHeroMeta.Text = ($TxtHeroMeta.Text -replace 'UDP: .*$', "UDP: $sel")
-        Set-Status "Применён UDP-фейк: $sel" $AccentLightHex
+        if ($restartOk) {
+            Set-Status "Применён UDP-фейк: $sel" $AccentLightHex
+        } else {
+            Set-Status 'Не удалось перезапустить службу zapret после смены UDP-фейка.' '#D97777'
+        }
     }
 })
 
@@ -1759,7 +1801,10 @@ function Install-Strategy([string]$BatFullPath) {
 $BtnTabCore.Add_Click({ Load-Strategies 'core' })
 $BtnTabArch.Add_Click({ Load-Strategies 'arch' })
 $BtnRefresh.Add_Click({ Refresh-Dashboard; Load-Strategies $script:CurrentTab; Set-Status 'Статус обновлён.' $AccentLightHex })
-$BtnOpenDir.Add_Click({ Start-Process -FilePath "$env:SystemRoot\explorer.exe" -ArgumentList "`"$($Root.TrimEnd('\'))`"" })
+$BtnOpenDir.Add_Click({
+    $dirArg = Format-Z2DirNoSlash $Root
+    Start-Process -FilePath "$env:SystemRoot\explorer.exe" -ArgumentList "`"$dirArg`""
+})
 $BtnCreateShortcut.Add_Click({
     Set-Z2DesktopAndFolderIcons $Root
     Show-Toast 'Ярлык Zapret2 Kotek создан на Рабочем столе и в меню Пуск' $false
@@ -1789,22 +1834,41 @@ $CmbQuickStrat.Add_SelectionChanged({
 
 $CmbTgMode.Add_SelectionChanged({
     if ($script:SuppressTgModeEvent) { return }
+    if (-not (Test-Z2GuiAdmin -RefreshUi)) { return }
     $mi = $CmbTgMode.SelectedIndex
     if ($mi -lt 0 -or $mi -ge $script:TgModeKeys.Count) { return }
     $newMode = $script:TgModeKeys[$mi]
     $tgConf = Join-Path $Root 'utils\tgws_proxy.conf'
-    if (Test-Path -LiteralPath $tgConf) {
-        $rawC = [string](Get-Content -LiteralPath $tgConf -Raw -Encoding UTF8)
-        if ($rawC -match '(?m)^mode=[^\r\n]*') { $rawC = [regex]::Replace($rawC, '(?m)^mode=[^\r\n]*', "mode=$newMode") }
-        else { $rawC = $rawC.TrimEnd() + "`r`nmode=$newMode`r`n" }
-        [System.IO.File]::WriteAllText($tgConf, $rawC, (New-Object System.Text.UTF8Encoding($false)))
+    try {
+        if (Test-Path -LiteralPath $tgConf) {
+            $rawC = [string](Get-Content -LiteralPath $tgConf -Raw -Encoding UTF8 -ErrorAction Stop)
+            if ($rawC -match '(?m)^mode=[^\r\n]*') { $rawC = [regex]::Replace($rawC, '(?m)^mode=[^\r\n]*', "mode=$newMode") }
+            else { $rawC = $rawC.TrimEnd() + "`r`nmode=$newMode`r`n" }
+            [System.IO.File]::WriteAllText($tgConf, $rawC, (New-Object System.Text.UTF8Encoding($false)))
+        }
+    } catch {
+        Refresh-Dashboard
+        Show-Toast "Не удалось сохранить режим Telegram Proxy: $($_.Exception.Message)" $true
+        return
     }
     $svcTg = Get-Service -Name 'zapret-tgws' -ErrorAction SilentlyContinue
-    if ($null -ne $svcTg -and $svcTg.Status -eq 'Running') {
-        Restart-Service -Name 'zapret-tgws' -Force -ErrorAction SilentlyContinue
+    $restartOk = $true
+    if ($null -ne $svcTg) {
+        try {
+            if ($svcTg.Status -eq 'Running') {
+                Restart-Service -Name 'zapret-tgws' -Force -ErrorAction Stop
+            }
+        } catch {
+            $restartOk = $false
+            Show-Toast "Режим сохранён, но не удалось перезапустить службу zapret-tgws: $($_.Exception.Message)" $true
+        } finally {
+            try { $svcTg.Dispose() } catch {}
+        }
     }
     Refresh-Dashboard
-    Show-Toast "Telegram Proxy: $($script:TgModeHints[$newMode])" $false
+    if ($restartOk) {
+        Show-Toast "Telegram Proxy: $($script:TgModeHints[$newMode])" $false
+    }
 })
 
 $BtnAddStrat.Add_Click({
@@ -1989,6 +2053,7 @@ if ($null -ne $BtnCopyTaskLog) {
 }
 
 $BtnTgToggle.Add_Click({
+    if (-not (Test-Z2GuiAdmin)) { return }
     $svcTg = Get-Service -Name 'zapret-tgws' -ErrorAction SilentlyContinue
     $svcExists = ($null -ne $svcTg)
     $isRun = ($svcExists -and $svcTg.Status -eq 'Running')
@@ -1999,7 +2064,7 @@ $BtnTgToggle.Add_Click({
         try {
             $tgExpectedExe = [System.IO.Path]::GetFullPath((Join-Path $Root 'bin\tg-ws-proxy.exe'))
             $tgImgPath = [string](Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Services\zapret-tgws' -Name 'ImagePath' -ErrorAction SilentlyContinue).ImagePath
-            $tgMatch = [regex]::Match($tgImgPath, '"?([A-Za-z]:\\[^"]+?\\bin\\tg-ws-proxy\.exe)"?', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            $tgMatch = [regex]::Match($tgImgPath, '"?([A-Za-z]:\\(?:[^"]+\\)?bin\\tg-ws-proxy\.exe)"?', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
             if (-not $tgMatch.Success) {
                 $tgNeedsReinstall = $true
             } else {
@@ -2075,6 +2140,7 @@ $BtnTgToggle.Add_Click({
 })
 
 $BtnPause.Add_Click({
+    if (-not (Test-Z2GuiAdmin)) { return }
     $svcZ = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
     if ($null -eq $svcZ) {
         Set-Status 'Служба zapret не установлена — сначала запусти Автонастройку.' '#D9B066'
@@ -2096,7 +2162,10 @@ $BtnPause.Add_Click({
                     try { Start-Process -FilePath $scExeP -ArgumentList "stop $drv" -WindowStyle Hidden -Wait | Out-Null } catch {}
                 }
                 Start-Sleep -Milliseconds 200
-                return @{ Action = 'pause'; Ok = $true }
+                $svcAfterP = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+                $okP = ($null -eq $svcAfterP -or $svcAfterP.Status -ne 'Running')
+                if ($null -ne $svcAfterP) { try { $svcAfterP.Dispose() } catch {} }
+                return @{ Action = 'pause'; Ok = $okP }
             } else {
                 Start-Service -Name 'zapret' -ErrorAction SilentlyContinue
                 $tgEnResume = $true
@@ -2129,6 +2198,7 @@ $BtnPause.Add_Click({
 })
 
 function Apply-SettingsNow([bool]$UpdateGameFilter = $false) {
+    if (-not (Test-Z2GuiAdmin -RefreshUi)) { return $false }
     try {
         $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
         $fAuto = Join-Path $Root 'utils\autohostlist.enabled'
@@ -2159,7 +2229,7 @@ function Apply-SettingsNow([bool]$UpdateGameFilter = $false) {
     } catch {
         Show-Toast "Не удалось сохранить настройки на диск: $($_.Exception.Message)" $true
         Refresh-Dashboard
-        return
+        return $false
     }
 
     $cur = $script:ActiveStratName
@@ -2172,12 +2242,14 @@ function Apply-SettingsNow([bool]$UpdateGameFilter = $false) {
         Refresh-Dashboard
         Set-Status 'Настройка сохранена.' '#D9B066'
     }
+    return $true
 }
-$ChkAutoHost.Add_Click({ Apply-SettingsNow $false })
-$ChkWarp.Add_Click({ Apply-SettingsNow $false })
-$ChkGameFilter.Add_Click({ Apply-SettingsNow $true })
-$ChkKernelFilter.Add_Click({ Apply-SettingsNow $false })
+$ChkAutoHost.Add_Click({ [void](Apply-SettingsNow $false) })
+$ChkWarp.Add_Click({ [void](Apply-SettingsNow $false) })
+$ChkGameFilter.Add_Click({ [void](Apply-SettingsNow $true) })
+$ChkKernelFilter.Add_Click({ [void](Apply-SettingsNow $false) })
 $ChkNlmVpn.Add_Click({
+    if (-not (Test-Z2GuiAdmin -RefreshUi)) { return }
     $nlmScript = Join-Path $Root 'utils\nlm_helper.ps1'
     if ($ChkNlmVpn.IsChecked) {
         $global:LASTEXITCODE = 0
@@ -2190,38 +2262,58 @@ $ChkNlmVpn.Add_Click({
     } else {
         & $nlmScript -Action clear -Root $Root | Out-Null
     }
-    Apply-SettingsNow $false
+    [void](Apply-SettingsNow $false)
 })
 $BtnNlmConfig.Add_Click({
+    if (-not (Test-Z2GuiAdmin)) { return }
     if (Get-Command Show-Z2NlmDialog -ErrorAction SilentlyContinue) {
         $saved = Show-Z2NlmDialog $Root $win $AccentHex
         if ($saved) {
             Refresh-Dashboard
-            Apply-SettingsNow $false
-            Show-Toast 'Список интерфейсов обхода (WinDivert) обновлён и применён' $false
+            if (Apply-SettingsNow $false) {
+                Show-Toast 'Список интерфейсов обхода (WinDivert) обновлён и применён' $false
+            }
         }
     }
 })
 $BtnBrowserFix.Add_Click({
+    if (-not (Test-Z2GuiAdmin)) { return }
     if (Show-Z2BrowserDialog $Root $win $AccentHex) {
         Refresh-Dashboard
-        Show-Toast 'Настройки браузеров обновлены — перезапусти браузер.' $false
+        if ($script:Z2LastBrowserOpOk) {
+            Show-Toast 'Настройки браузеров обновлены — перезапусти браузер.' $false
+        } else {
+            Show-Toast 'Не все политики браузеров удалось обновить — проверь права администратора.' $true
+        }
     }
 })
 if ($null -ne $ChkBrowserQuic) {
     $ChkBrowserQuic.Add_Click({
         if ($null -ne $script:WatchedProc -and -not $script:WatchedProc.HasExited) { $ChkBrowserQuic.IsChecked = -not [bool]$ChkBrowserQuic.IsChecked; Set-Status 'Дождись завершения текущей задачи.' '#D9B066'; return }
+        if (-not (Test-Z2GuiAdmin -RefreshUi)) { return }
         $bhP = Join-Path $Root 'utils\browser_helper.ps1'
         if (Test-Path -LiteralPath $bhP) {
             if ($ChkBrowserQuic.IsChecked) {
                 [void](Disable-BrowserFix $true @() $Root $false $true)
-                [void](Enable-BrowserFix @() $Root $true $false)
-                Show-Toast 'QUIC (HTTP/3) отключён в браузерах — перезапусти браузер.' $false
+                $dohClrOk = $script:Z2LastBrowserOpOk
+                $appliedBr = @(Enable-BrowserFix @() $Root $true $false | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+                Refresh-Dashboard
+                if (-not $dohClrOk -or -not $script:Z2LastBrowserOpOk) {
+                    Show-Toast 'Не удалось применить политики браузеров — проверь права администратора.' $true
+                } elseif ($appliedBr.Count -gt 0) {
+                    Show-Toast 'QUIC (HTTP/3) отключён в браузерах — перезапусти браузер.' $false
+                } else {
+                    Show-Toast 'Подходящие браузеры не найдены (Opera настраивается вручную).' $true
+                }
             } else {
                 [void](Disable-BrowserFix $true @() $Root $true $true)
-                Show-Toast 'Политики браузеров возвращены к стандартным — перезапусти браузер.' $false
+                Refresh-Dashboard
+                if ($script:Z2LastBrowserOpOk) {
+                    Show-Toast 'Политики браузеров возвращены к стандартным — перезапусти браузер.' $false
+                } else {
+                    Show-Toast 'Не удалось сбросить политики браузеров — проверь права администратора.' $true
+                }
             }
-            Refresh-Dashboard
         }
     })
 }
@@ -2347,6 +2439,7 @@ if ($null -ne $BtnAiSelAll) {
 if ($null -ne $BtnAiToggle) {
     $BtnAiToggle.Add_Click({
         if ($null -ne $script:WatchedProc -and -not $script:WatchedProc.HasExited) { Set-Status 'Дождись завершения текущей задачи.' '#D9B066'; return }
+        if (-not (Test-Z2GuiAdmin)) { return }
         $aiP = Join-Path $Root 'utils\ai_bypass_helper.ps1'
         $bhP = Join-Path $Root 'utils\browser_helper.ps1'
         if (-not (Test-Path -LiteralPath $aiP)) { return }
@@ -2407,7 +2500,11 @@ if ($null -ne $BtnAiToggle) {
             }
             if ($dohConflict) {
                 [void](Disable-BrowserFix $true @() $Root $false $true)
-                Show-Toast 'DoH в браузерах автоматически отключён (несовместим с «Обходом ИИ») — перезапусти браузер.' $false
+                if ($script:Z2LastBrowserOpOk) {
+                    Show-Toast 'DoH в браузерах автоматически отключён (несовместим с «Обходом ИИ») — перезапусти браузер.' $false
+                } else {
+                    Show-Toast 'В браузерах включён DoH — не удалось автоматически отключить (отключи вручную в Настройках).' $true
+                }
             }
             $selMode = 'auto'
             if ($null -ne $CmbAiMode -and $CmbAiMode.SelectedIndex -ge 0 -and $CmbAiMode.SelectedIndex -lt $script:AiModeKeys.Count) {
@@ -2456,6 +2553,7 @@ $BtnEditExUser.Add_Click({
     }
 })
 $ChkAutoUpdate.Add_Click({
+    if (-not (Test-Z2GuiAdmin -RefreshUi)) { Sync-AutoDoneUpdBtn; return }
     $auScript = Join-Path $Root 'utils\autoupdate_task.ps1'
     $selIdx = [Math]::Max(0, [Math]::Min($CmbAutoUpdMode.SelectedIndex, $script:AutoUpdKeys.Count - 1)); $selM = $script:AutoUpdKeys[$selIdx]
     if ($ChkAutoUpdate.IsChecked) {
@@ -2471,14 +2569,22 @@ $ChkAutoUpdate.Add_Click({
             Show-Toast "Автообновление включено: $mTxt" $false
         }
     } else {
+        $global:LASTEXITCODE = 0
         & $auScript -Action disable -Root $Root | Out-Null
-        $CmbAutoUpdMode.IsEnabled = $false
-        Show-Toast 'Автообновление отключено.' $false
+        if ($LASTEXITCODE -ne 0 -or $null -ne (Get-Z2AutoUpdateTask)) {
+            $ChkAutoUpdate.IsChecked = $true
+            $CmbAutoUpdMode.IsEnabled = $true
+            Show-Toast 'Не удалось отключить автообновление — проверь права администратора.' $true
+        } else {
+            $CmbAutoUpdMode.IsEnabled = $false
+            Show-Toast 'Автообновление отключено.' $false
+        }
     }
     Sync-AutoDoneUpdBtn
 })
 $CmbAutoUpdMode.Add_SelectionChanged({
     if ($script:SuppressAutoUpdEvent -or -not $ChkAutoUpdate.IsChecked) { return }
+    if (-not (Test-Z2GuiAdmin -RefreshUi)) { return }
     $auScript = Join-Path $Root 'utils\autoupdate_task.ps1'
     $selIdx = [Math]::Max(0, [Math]::Min($CmbAutoUpdMode.SelectedIndex, $script:AutoUpdKeys.Count - 1)); $selM = $script:AutoUpdKeys[$selIdx]
     $global:LASTEXITCODE = 0
@@ -2515,12 +2621,18 @@ Refresh-Dashboard
 # Unified ContentRendered handler is registered below (merges AutoStart relocation + service migration)
 $CmbIpsetMode.Add_SelectionChanged({
     if ($script:SuppressIpsetEvent) { return }
+    if (-not (Test-Z2GuiAdmin -RefreshUi)) { return }
     $idx = $CmbIpsetMode.SelectedIndex
     if ($idx -lt 0 -or $idx -ge $script:IpsetModeKeys.Count) { return }
     $mode = $script:IpsetModeKeys[$idx]
     $ok = Set-Z2IpsetMode $Root $mode
     if (-not $ok) {
-        Show-Toast 'Нет резервной копии IPSet — нажми «Обновить» для загрузки списка.' $true
+        $bakChk = Join-Path $Root 'lists\ipset-all.txt.backup'
+        if ($mode -eq 'loaded' -and -not (Test-Path -LiteralPath $bakChk)) {
+            Show-Toast 'Нет резервной копии IPSet — нажми «Обновить» для загрузки списка.' $true
+        } else {
+            Show-Toast 'Не удалось переключить режим IPSet или перезапустить службу zapret.' $true
+        }
         Refresh-Dashboard
         return
     }
@@ -2666,20 +2778,31 @@ public class Z2DarkTrayRenderer : ToolStripProfessionalRenderer {
 }
 
 $ChkTrayMode.Add_Click({
+    if (-not (Test-Z2GuiAdmin -RefreshUi)) { return }
     $fTray = Join-Path $Root 'utils\tray_mode.enabled'
     $fMin  = Join-Path $Root 'utils\tray_start_minimized.enabled'
     try {
         if ($ChkTrayMode.IsChecked) {
+            $taskOk = [bool](Register-Z2TrayStartupTask $Root)
+            if (-not $taskOk) {
+                Show-Toast 'Не удалось зарегистрировать задачу автозапуска в трее (проверь права администратора).' $true
+                Refresh-Dashboard
+                return
+            }
             [System.IO.File]::WriteAllText($fTray, "1`r`n", (New-Object System.Text.UTF8Encoding($false)))
             Ensure-Z2TrayIcon
-            [void](Register-Z2TrayStartupTask $Root)
             Show-Toast 'Иконка в трее включена и добавлена в автозапуск Windows (без окна UAC)' $false
         } else {
-            if (Test-Path -LiteralPath $fTray) { Remove-Item -LiteralPath $fTray -Force -ErrorAction SilentlyContinue }
-            if (Test-Path -LiteralPath $fMin)  { Remove-Item -LiteralPath $fMin  -Force -ErrorAction SilentlyContinue }
+            $unregOk = [bool](Unregister-Z2TrayStartupTask)
+            if (-not $unregOk) {
+                Show-Toast 'Не удалось удалить задачу автозапуска из Планировщика (проверь права администратора).' $true
+                Refresh-Dashboard
+                return
+            }
+            if (Test-Path -LiteralPath $fTray) { Remove-Item -LiteralPath $fTray -Force -ErrorAction Stop }
+            if (Test-Path -LiteralPath $fMin)  { Remove-Item -LiteralPath $fMin  -Force -ErrorAction Stop }
             if ($null -ne $ChkTrayStartMin) { $ChkTrayStartMin.IsChecked = $false }
             Dispose-Z2TrayIcon
-            Unregister-Z2TrayStartupTask
             Show-Toast 'Иконка в трее отключена и убрана из автозапуска' $false
         }
     } catch {
@@ -2810,7 +2933,7 @@ $win.Add_ContentRendered({
                         Get-Process -Name 'winws2','winws','tg-ws-proxy' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
                         Start-Sleep -Milliseconds 350
                         if (-not (Test-Path -LiteralPath $targetRoot)) { New-Item -ItemType Directory -Path $targetRoot -Force | Out-Null }
-                        & "$env:SystemRoot\System32\robocopy.exe" ($SrcRoot.TrimEnd('\')) $targetRoot /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+                        & "$env:SystemRoot\System32\robocopy.exe" (Format-Z2DirNoSlash $SrcRoot) $targetRoot /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
                         return @{ Rc = $LASTEXITCODE; Target = $targetRoot }
                     } catch {
                         return @{ Rc = 16; Target = $targetRoot; Err = $_.Exception.Message }
@@ -2845,7 +2968,7 @@ $win.Add_ContentRendered({
     try {
         $imgPath = (Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Services\zapret' -Name 'ImagePath' -ErrorAction SilentlyContinue).ImagePath
         if (-not [string]::IsNullOrWhiteSpace($imgPath)) {
-            $exeMatch = [regex]::Match($imgPath, '"?([A-Za-z]:\\[^"]+?\\bin\\winws2\.exe)"?', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            $exeMatch = [regex]::Match($imgPath, '"?([A-Za-z]:\\(?:[^"]+\\)?bin\\winws2\.exe)"?', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
             if ($exeMatch.Success) {
                 $svcRoot = [System.IO.Path]::GetFullPath((Split-Path -Parent (Split-Path -Parent $exeMatch.Groups[1].Value))).TrimEnd('\') + '\'
                 $curRoot = [System.IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
@@ -2944,7 +3067,7 @@ $win.Add_ContentRendered({
                                 $applyOk = $true
                                 if (Test-Path -LiteralPath $batUse) {
                                     $global:LASTEXITCODE = 0
-                                    & (Join-Path $NewRoot 'utils\apply_strategy.ps1') -Root ($NewRoot.TrimEnd('\')) -BatPath $batUse | Out-Null
+                                    & (Join-Path $NewRoot 'utils\apply_strategy.ps1') -Root $NewRoot -BatPath $batUse | Out-Null
                                     if ($LASTEXITCODE -ne 0) { $applyOk = $false }
                                 }
                                 if ($wasTg) {
@@ -2980,11 +3103,13 @@ $win.Add_ContentRendered({
         }
     } catch {}
     try {
-        $fIcoChk = Join-Path $Root 'utils\kotek_folder.ico'
-        $fIniChk = Join-Path ($Root.TrimEnd('\')) 'desktop.ini'
-        if ((-not (Test-Path -LiteralPath $fIcoChk)) -or (-not (Test-Path -LiteralPath $fIniChk))) {
-            if (Get-Command Set-Z2DesktopAndFolderIcons -ErrorAction SilentlyContinue) {
-                Set-Z2DesktopAndFolderIcons $Root -FolderOnly
+        if ($Root -notmatch '^[A-Za-z]:\\$') {
+            $fIcoChk = Join-Path $Root 'utils\kotek_folder.ico'
+            $fIniChk = Join-Path $Root 'desktop.ini'
+            if ((-not (Test-Path -LiteralPath $fIcoChk)) -or (-not (Test-Path -LiteralPath $fIniChk))) {
+                if (Get-Command Set-Z2DesktopAndFolderIcons -ErrorAction SilentlyContinue) {
+                    Set-Z2DesktopAndFolderIcons $Root -FolderOnly
+                }
             }
         }
     } catch {}

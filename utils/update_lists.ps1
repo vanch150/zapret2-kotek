@@ -5,9 +5,30 @@
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-if (-not $Root) { $Root = $env:Z2_ROOT }
-if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
-$Root = $Root.Trim('"', "'", '\', '/') + '\'
+$commonPath = Join-Path $PSScriptRoot 'common.ps1'
+if (Test-Path -LiteralPath $commonPath) { . $commonPath }
+if (-not (Get-Command Test-Z2IsAdmin -ErrorAction SilentlyContinue)) {
+    function Test-Z2IsAdmin {
+        try {
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $pr = New-Object Security.Principal.WindowsPrincipal($id)
+            return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        } catch { return $false }
+    }
+}
+$Root = if (Get-Command Resolve-Z2Root -ErrorAction SilentlyContinue) {
+    Resolve-Z2Root $Root
+} else {
+    if ([string]::IsNullOrWhiteSpace($Root)) { $Root = $env:Z2_ROOT }
+    $cleanR = if ($null -ne $Root) { $Root.Trim().Trim('"').Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($cleanR)) { $cleanR = Split-Path -Parent $PSScriptRoot }
+    if ($cleanR -match '^[A-Za-z]:$') { $cleanR += '\' }
+    try { [System.IO.Path]::GetFullPath($cleanR).TrimEnd('\', '/') + '\' } catch { $cleanR.TrimEnd('\', '/') + '\' }
+}
+if (-not (Test-Z2IsAdmin)) {
+    Write-Host '  [X] Требуются права администратора для обновления списков и hosts.' -ForegroundColor Red
+    exit 1
+}
 
 $ListsDir = Join-Path $Root 'lists'
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
@@ -332,20 +353,29 @@ try {
     if (Test-Path -LiteralPath $tmpDir) { Remove-Item -LiteralPath $tmpDir -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
+$restartFailed = $false
 if (-not $NoRestart -and ($ipsetUpdated -or $sysListsUpdated -gt 0)) {
     $svcZ = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
     if ($null -ne $svcZ) {
         try {
             if ($svcZ.Status -eq 'Running') {
-                Restart-Service -Name 'zapret' -Force -ErrorAction SilentlyContinue
+                Restart-Service -Name 'zapret' -Force -ErrorAction Stop
                 Write-Host '        [OK] Служба zapret перезапущена с новыми списками' -ForegroundColor Green
             }
+        } catch {
+            $restartFailed = $true
+            Write-Host ("        [X] Не удалось перезапустить службу zapret: {0}" -f $_.Exception.Message) -ForegroundColor Red
         } finally {
             try { $svcZ.Dispose() } catch {}
         }
     }
 }
 
+if ($restartFailed) {
+    Write-Host ("  [!] IPSet: {0} · Списки: {1} · Hosts: {2} (перезапуск службы zapret не удался)" -f $ipsetSummary, $sysListsSummary, $hostsSummary) -ForegroundColor Yellow
+    Write-Host ''
+    exit 1
+}
 Write-Host ("  [OK] IPSet: {0} · Списки: {1} · Hosts: {2}" -f $ipsetSummary, $sysListsSummary, $hostsSummary) -ForegroundColor Green
 Write-Host ''
 if ($dlOk -or $sysListsUpdated -gt 0 -or $hostsFromNet) { exit 0 } else { exit 2 }

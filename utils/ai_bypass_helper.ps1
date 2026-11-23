@@ -6,9 +6,28 @@
 )
 try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}
 $ErrorActionPreference = 'SilentlyContinue'
-if (-not $Root) { $Root = $env:Z2_ROOT }
-if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
-$Root = $Root.Trim('"', "'", '\', '/') + '\'
+$commonPath = Join-Path $PSScriptRoot 'common.ps1'
+if ((Test-Path -LiteralPath $commonPath) -and -not (Get-Command Resolve-Z2Root -ErrorAction SilentlyContinue)) {
+    . $commonPath
+}
+if (-not (Get-Command Test-Z2IsAdmin -ErrorAction SilentlyContinue)) {
+    function Test-Z2IsAdmin {
+        try {
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $pr = New-Object Security.Principal.WindowsPrincipal($id)
+            return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        } catch { return $false }
+    }
+}
+$Root = if (Get-Command Resolve-Z2Root -ErrorAction SilentlyContinue) {
+    Resolve-Z2Root $Root
+} else {
+    if ([string]::IsNullOrWhiteSpace($Root)) { $Root = $env:Z2_ROOT }
+    $cleanR = if ($null -ne $Root) { $Root.Trim().Trim('"').Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($cleanR)) { $cleanR = Split-Path -Parent $PSScriptRoot }
+    if ($cleanR -match '^[A-Za-z]:$') { $cleanR += '\' }
+    try { [System.IO.Path]::GetFullPath($cleanR).TrimEnd('\', '/') + '\' } catch { $cleanR.TrimEnd('\', '/') + '\' }
+}
 
 $script:Z2AiNrptTag = 'Zapret2KotekAI'
 $script:Z2AiCatalog = @(
@@ -364,6 +383,7 @@ function Get-Z2ActiveVpnInfo {
 }
 
 function Restore-Z2AiBypassFast([string]$RootPath = '', [string[]]$Domains = @(), [string[]]$NameServers = @()) {
+    if (-not (Test-Z2IsAdmin)) { return $false }
     if (-not $RootPath) { $RootPath = $Root }
     if ($Domains.Count -eq 0 -or $NameServers.Count -eq 0) { return $false }
     [void](Disable-Z2AiBypass $RootPath)
@@ -647,31 +667,44 @@ function Test-Z2AiSmartDns([string]$DnsIp, [string]$TestHost = 'gemini.google.co
 }
 
 function Disable-Z2AiBypass([string]$RootPath = '') {
+    if (-not (Test-Z2IsAdmin)) { return -1 }
     if (-not $RootPath) { $RootPath = $Root }
     $removed = 0
+    $hadErr = $false
     # Instant registry removal avoids CIM/WMI hangs inside background GUI runspaces
     if (Test-Path -LiteralPath $script:Z2AiNrptRegPath) {
         try {
-            foreach ($sub in @(Get-ChildItem -LiteralPath $script:Z2AiNrptRegPath -ErrorAction SilentlyContinue)) {
-                $props = Get-ItemProperty -LiteralPath $sub.PSPath -ErrorAction SilentlyContinue
-                if ($null -ne $props -and [string]$props.Comment -eq $script:Z2AiNrptTag) {
-                    try {
+            foreach ($sub in @(Get-ChildItem -LiteralPath $script:Z2AiNrptRegPath -ErrorAction Stop)) {
+                try {
+                    $props = Get-ItemProperty -LiteralPath $sub.PSPath -ErrorAction Stop
+                    if ($null -ne $props -and [string]$props.Comment -eq $script:Z2AiNrptTag) {
                         Remove-Item -LiteralPath $sub.PSPath -Recurse -Force -ErrorAction Stop
                         $removed++
-                    } catch {}
+                    }
+                } catch {
+                    $hadErr = $true
                 }
             }
-        } catch {}
+        } catch {
+            $hadErr = $true
+        }
     } else {
         try {
             $rules = @(Get-DnsClientNrptRule -ErrorAction SilentlyContinue | Where-Object { $_.Comment -eq $script:Z2AiNrptTag })
             foreach ($r in $rules) {
-                Remove-DnsClientNrptRule -Name $r.Name -Force -Confirm:$false -ErrorAction SilentlyContinue
-                $removed++
+                try {
+                    Remove-DnsClientNrptRule -Name $r.Name -Force -Confirm:$false -ErrorAction Stop
+                    $removed++
+                } catch {
+                    $hadErr = $true
+                }
             }
-        } catch {}
+        } catch {
+            $hadErr = $true
+        }
     }
     Invoke-Z2FlushDnsFast
+    if ($hadErr -and $removed -eq 0) { return -1 }
     return $removed
 }
 
@@ -707,6 +740,10 @@ function Enable-Z2AiBypass(
     [bool]$ServicesSpecified = $false,
     [bool]$PreserveMode = $false
 ) {
+    if (-not (Test-Z2IsAdmin)) {
+        Write-Host '  [X] Требуются права администратора для настройки обхода ИИ (NRPT).' -ForegroundColor Red
+        return $false
+    }
     if (-not $RootPath) { $RootPath = $Root }
     $cfg = Get-Z2AiBypassConf $RootPath
     $searchMode = $cfg.Mode
@@ -838,12 +875,24 @@ if ($MyInvocation.InvocationName -ne '.') {
         }
         if ($ok) { exit 0 } else { exit 1 }
     } elseif ($Action -eq 'disable') {
-        [void](Disable-Z2AiBypass $Root)
+        if (-not (Test-Z2IsAdmin)) {
+            Write-Host '  [X] Требуются права администратора для отключения обхода ИИ (NRPT).' -ForegroundColor Red
+            exit 1
+        }
+        $remRes = Disable-Z2AiBypass $Root
+        if ($remRes -lt 0 -or (Get-Z2AiBypassState $Root).Active) {
+            Write-Host '  [X] Не удалось удалить все правила NRPT обхода ИИ (проверь права администратора).' -ForegroundColor Red
+            exit 1
+        }
         Write-Host '  [OK] Обход ИИ выключен, правила NRPT удалены.' -ForegroundColor Green
         exit 0
     } elseif ($Action -eq 'probe') {
         $st = Get-Z2AiBypassState $Root
         if (-not $st.Active) {
+            if (-not (Test-Z2IsAdmin)) {
+                Write-Host '  [X] Требуются права администратора для включения обхода ИИ (NRPT).' -ForegroundColor Red
+                exit 1
+            }
             Write-Host '  [!] Обход ИИ выключен — запускаю подбор живого SmartDNS...' -ForegroundColor Yellow
             if ($svcSpecified) {
                 $ok = Enable-Z2AiBypass -RootPath $Root -SelectedMode 'auto' -Services $Services -ServicesSpecified $true -PreserveMode $true

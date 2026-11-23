@@ -5,10 +5,35 @@
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'Continue'
-if (-not $Root) { $Root = $env:Z2_ROOT }
-if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
-try { $Root = [System.IO.Path]::GetFullPath($Root.Trim('"', "'")).TrimEnd('\', '/') + '\' } catch { $Root = $Root.Trim('"', "'", '\', '/') + '\' }
-$rootTrim = $Root.TrimEnd('\')
+$commonPath = Join-Path $PSScriptRoot 'common.ps1'
+if (Test-Path -LiteralPath $commonPath) { . $commonPath }
+if (-not (Get-Command Test-Z2IsAdmin -ErrorAction SilentlyContinue)) {
+    function Test-Z2IsAdmin {
+        try {
+            $id = [Security.Principal.WindowsIdentity]::GetCurrent()
+            $pr = New-Object Security.Principal.WindowsPrincipal($id)
+            return $pr.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        } catch { return $false }
+    }
+}
+$Root = if (Get-Command Resolve-Z2Root -ErrorAction SilentlyContinue) {
+    Resolve-Z2Root $Root
+} else {
+    if ([string]::IsNullOrWhiteSpace($Root)) { $Root = $env:Z2_ROOT }
+    $cleanR = if ($null -ne $Root) { $Root.Trim().Trim('"').Trim() } else { '' }
+    if ([string]::IsNullOrWhiteSpace($cleanR)) { $cleanR = Split-Path -Parent $PSScriptRoot }
+    if ($cleanR -match '^[A-Za-z]:$') { $cleanR += '\' }
+    try { [System.IO.Path]::GetFullPath($cleanR).TrimEnd('\', '/') + '\' } catch { $cleanR.TrimEnd('\', '/') + '\' }
+}
+$rootTrim = if (Get-Command Format-Z2DirNoSlash -ErrorAction SilentlyContinue) {
+    Format-Z2DirNoSlash $Root
+} else {
+    if ($Root -match '^[A-Za-z]:[/\\]?$') { $Root.Substring(0, 2) + '\' } else { $Root.TrimEnd('\', '/') }
+}
+if (-not (Test-Z2IsAdmin)) {
+    Write-Host '  [X] Требуются права администратора — запусти UNINSTALL.bat от имени администратора.' -ForegroundColor Red
+    exit 1
+}
 
 function Get-ServiceImagePath([string]$ServiceName) {
     try {
@@ -206,8 +231,13 @@ $bpHelper = Join-Path $Root 'utils\browser_helper.ps1'
 $bpRegFlag = $false
 try { $bpRegFlag = ((Get-ItemProperty -Path 'HKLM:\SOFTWARE\Zapret2' -Name 'BrowserPolicyApplied' -ErrorAction SilentlyContinue).BrowserPolicyApplied -eq 1) } catch {}
 if (($bpRegFlag -or (Test-Path -LiteralPath $bpMarker)) -and (Test-Path -LiteralPath $bpHelper)) {
+    $global:LASTEXITCODE = 0
     & $bpHelper -Action revert -Root $Root
-    Write-Host '        [OK] Политики QUIC/DoH в браузерах откачены к стандарту' -ForegroundColor Green
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host '        [OK] Политики QUIC/DoH в браузерах откачены к стандарту' -ForegroundColor Green
+    } else {
+        Write-Host '        [!] Не удалось полностью откатить политики браузеров' -ForegroundColor Yellow
+    }
 }
 
 Write-Host "`n  [4/4] Очистка временных файлов в папке Zapret2..." -ForegroundColor Yellow
@@ -216,13 +246,13 @@ $unsafeDirs = @(
     (Join-Path $env:USERPROFILE 'Downloads'), (Join-Path $env:USERPROFILE 'Desktop'), (Join-Path $env:USERPROFILE 'Documents'),
     (Split-Path -Parent $env:USERPROFILE)
 ) | Where-Object { $_ } | ForEach-Object { $_.TrimEnd('\') }
-$isUnsafeRoot = ($rootTrim.Length -le 6) -or ($unsafeDirs -contains $rootTrim) -or (-not (Test-Path -LiteralPath (Join-Path $rootTrim 'utils\service.bat')))
+$isUnsafeRoot = ($rootTrim.Length -le 6) -or ($unsafeDirs -contains $rootTrim) -or (-not (Test-Path -LiteralPath (Join-Path $Root 'utils\service.bat')))
 if (Test-Path -LiteralPath $rootTrim) {
     if (-not $isUnsafeRoot) {
         & "$env:SystemRoot\System32\icacls.exe" "$rootTrim" /reset /T /C /L /Q >$null 2>&1
     } else {
         foreach ($sub in @('bin', 'utils', 'lists', 'strategies', 'configs_archive')) {
-            $subP = Join-Path $rootTrim $sub
+            $subP = Join-Path $Root $sub
             if (Test-Path -LiteralPath $subP) {
                 & "$env:SystemRoot\System32\icacls.exe" "$subP" /reset /T /C /L /Q >$null 2>&1
             }
@@ -273,11 +303,13 @@ try {
             if (Test-Path -LiteralPath $lnkP) { Remove-Item -LiteralPath $lnkP -Force -ErrorAction SilentlyContinue }
         }
     }
-    $iniP = Join-Path $rootTrim 'desktop.ini'
-    if (Test-Path -LiteralPath $iniP) {
-        & "$env:SystemRoot\System32\attrib.exe" -h -s "$iniP" 2>$null | Out-Null
-        Remove-Item -LiteralPath $iniP -Force -ErrorAction SilentlyContinue
-        & "$env:SystemRoot\System32\attrib.exe" -s "$rootTrim" 2>$null | Out-Null
+    if ($Root -notmatch '^[A-Za-z]:\\$') {
+        $iniP = Join-Path $Root 'desktop.ini'
+        if (Test-Path -LiteralPath $iniP) {
+            & "$env:SystemRoot\System32\attrib.exe" -h -s "$iniP" 2>$null | Out-Null
+            Remove-Item -LiteralPath $iniP -Force -ErrorAction SilentlyContinue
+            & "$env:SystemRoot\System32\attrib.exe" -s "$rootTrim" 2>$null | Out-Null
+        }
     }
 } catch {}
 
