@@ -327,27 +327,32 @@ if ($gfMode -in @('tcp', 'all')) {
 # 10. Network probes (YouTube, YT HD 120KB, Discord, 7TV CDN, CF 256KB) with exitcode & speed
 $curlExe = "$env:SystemRoot\System32\curl.exe"
 $invC = [System.Globalization.CultureInfo]::InvariantCulture
-function Invoke-Z2DiagProbe([string]$Url, [int]$MaxSec = 5) {
+function Invoke-Z2DiagProbe([string]$Url, [int]$MaxSec = 5, [int]$Retries = 0) {
     $res = [PSCustomObject]@{ Code='000'; Bytes=0L; Speed=0.0; Exit=99; Ok=$false; Label='000' }
     if (-not (Test-Path -LiteralPath $curlExe)) { return $res }
-    try {
-        $raw = [string](& $curlExe -4 -s -o NUL -w '%{http_code}|%{size_download}|%{speed_download}|%{exitcode}' --max-time $MaxSec $Url 2>$null)
-        $p = $raw.Trim() -split '\|'
-        if ($p.Count -ge 1 -and $p[0]) { $res.Code = $p[0].Trim() }
-        $tmpBytes = 0L
-        $tmpSpeed = 0.0
-        if ($p.Count -ge 2 -and [long]::TryParse($p[1].Trim(), [ref]$tmpBytes)) { $res.Bytes = $tmpBytes }
-        if ($p.Count -ge 3 -and [double]::TryParse($p[2].Trim().Replace(',', '.'), [System.Globalization.NumberStyles]::Float, $invC, [ref]$tmpSpeed)) { $res.Speed = $tmpSpeed }
-        if ($p.Count -ge 4 -and $p[3].Trim() -match '^\d+$') { $res.Exit = [int]$p[3].Trim() } else { $res.Exit = $LASTEXITCODE }
-        $kb = [int][Math]::Round($res.Bytes / 1024.0)
-        $kbs = [int][Math]::Round($res.Speed / 1024.0)
-        $res.Label = if ($res.Exit -eq 0) { "$($res.Code) (${kb}KB, ${kbs}KB/s)" } else { "$($res.Code) (e=$($res.Exit), ${kb}KB)" }
-    } catch {}
+    for ($attempt = 0; $attempt -le $Retries; $attempt++) {
+        $res = [PSCustomObject]@{ Code='000'; Bytes=0L; Speed=0.0; Exit=99; Ok=$false; Label='000' }
+        try {
+            $raw = [string](& $curlExe -4 -s -o NUL -w '%{http_code}|%{size_download}|%{speed_download}|%{exitcode}' --max-time $MaxSec $Url 2>$null)
+            $p = $raw.Trim() -split '\|'
+            if ($p.Count -ge 1 -and $p[0]) { $res.Code = $p[0].Trim() }
+            $tmpBytes = 0L
+            $tmpSpeed = 0.0
+            if ($p.Count -ge 2 -and [long]::TryParse($p[1].Trim(), [ref]$tmpBytes)) { $res.Bytes = $tmpBytes }
+            if ($p.Count -ge 3 -and [double]::TryParse($p[2].Trim().Replace(',', '.'), [System.Globalization.NumberStyles]::Float, $invC, [ref]$tmpSpeed)) { $res.Speed = $tmpSpeed }
+            if ($p.Count -ge 4 -and $p[3].Trim() -match '^\d+$') { $res.Exit = [int]$p[3].Trim() } else { $res.Exit = $LASTEXITCODE }
+            $kb = [int][Math]::Round($res.Bytes / 1024.0)
+            $kbs = [int][Math]::Round($res.Speed / 1024.0)
+            $res.Label = if ($res.Exit -eq 0) { "$($res.Code) (${kb}KB, ${kbs}KB/s)" } else { "$($res.Code) (e=$($res.Exit), ${kb}KB)" }
+        } catch {}
+        if ($res.Exit -eq 0) { break }
+        if ($attempt -lt $Retries) { Start-Sleep -Milliseconds 300 }
+    }
     return $res
 }
-$pYt  = Invoke-Z2DiagProbe 'https://www.youtube.com' 6
+$pYt  = Invoke-Z2DiagProbe 'https://www.youtube.com' 6 1
 $pYtH = Invoke-Z2DiagProbe 'https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg' 6
-$pDc  = Invoke-Z2DiagProbe 'https://discord.com' 4
+$pDc  = Invoke-Z2DiagProbe 'https://discord.com' 4 1
 $p7tv = Invoke-Z2DiagProbe 'https://cdn.7tv.app' 4
 $pCf  = Invoke-Z2DiagProbe 'https://speed.cloudflare.com/__down?bytes=262144' 6
 
@@ -360,10 +365,10 @@ $cfOk   = ($pCf.Exit -eq 0 -and $pCf.Code -eq '200' -and $pCf.Bytes -ge 200000)
 $probeLine = "YouTube: $($pYt.Label) · YT-HD: $($pYtH.Label) · Discord: $($pDc.Label) · 7TV: $($p7tv.Label) · CF256: $($pCf.Label)"
 if ($ytOk -and $ytHdOk -and $dcOk -and $tv7Ok -and $cfOk) {
     Add-DiagCheck 'probes' 'Доступ к YouTube, Discord, 7TV и скорость' 'OK' $probeLine ''
-} elseif ($ytOk -and $dcOk -and (-not $ytHdOk -or -not $cfOk -or -not $tv7Ok)) {
-    Add-DiagCheck 'probes' 'Доступ к YouTube, Discord, 7TV и скорость' 'WARN' $probeLine 'Часть тяжёлых целей (YT-HD / CF 256KB / 7TV) режется или тормозит. Попробуй другую стратегию (ALT12 / custom_wssize_antifreeze) или отключи QUIC в «Фиксе браузера».'
-} else {
+} elseif ((-not $ytOk -and -not $ytHdOk) -or (-not $ytOk -and -not $dcOk)) {
     Add-DiagCheck 'probes' 'Доступ к YouTube, Discord, 7TV и скорость' 'FAIL' $probeLine 'Текущая стратегия не пробивает блокировку провайдера. Нажми «Автонастройка» или «Глубокая оптимизация» на главной.'
+} else {
+    Add-DiagCheck 'probes' 'Доступ к YouTube, Discord, 7TV и скорость' 'WARN' $probeLine 'Часть целей работает, но одна или несколько просели (возможен разовый таймаут или ограничение на тяжёлых ресурсах). Если в браузере всё открывается — это нормально; иначе попробуй другую стратегию (ALT12 / custom_wssize_antifreeze) или отключи QUIC в «Фиксе браузера».'
 }
 
 # 10b. Browsers QUIC/DoH current status (neutral INFO, never alarms)
