@@ -15,6 +15,7 @@ Add-Type -AssemblyName WindowsBase
 . (Join-Path $PSScriptRoot 'gui_nlm_dialog.ps1')
 . (Join-Path $PSScriptRoot 'gui_diag_dialog.ps1')
 . (Join-Path $PSScriptRoot 'gui_browser_dialog.ps1')
+if (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'gui_antigravity_dialog.ps1')) { . (Join-Path $PSScriptRoot 'gui_antigravity_dialog.ps1') }
 . (Join-Path $PSScriptRoot 'gui_msg_dialog.ps1')
 if (-not (Enter-Z2GuiMutex)) {
     try {
@@ -251,8 +252,12 @@ $ChkAi_copilot      = $win.FindName('ChkAi_copilot')
 $ChkAi_grok         = $win.FindName('ChkAi_grok')
 $ChkAi_perplexity   = $win.FindName('ChkAi_perplexity')
 $ChkAi_ide_ai       = $win.FindName('ChkAi_ide_ai')
+$ChkAi_antigravity  = $win.FindName('ChkAi_antigravity')
 $BtnAiSelAll        = $win.FindName('BtnAiSelAll')
 $TxtAiPendingHint   = $win.FindName('TxtAiPendingHint')
+$BdAiClaudeWarn     = $win.FindName('BdAiClaudeWarn')
+$BdAiAntigravityHint= $win.FindName('BdAiAntigravityHint')
+$BtnAiAntigravityHelper = $win.FindName('BtnAiAntigravityHelper')
 $script:AiAppliedServicesStr = ''
 $script:AiNeedsRestart = $false
 $script:AiServiceCheckMap = [ordered]@{
@@ -262,7 +267,8 @@ $script:AiServiceCheckMap = [ordered]@{
     'copilot'    = $ChkAi_copilot
     'grok'       = $ChkAi_grok
     'perplexity' = $ChkAi_perplexity
-    'ide_ai'     = $ChkAi_ide_ai
+    'ide_ai'      = $ChkAi_ide_ai
+    'antigravity' = $ChkAi_antigravity
 }
 $BdBrowserFixBadge = $win.FindName('BdBrowserFixBadge')
 $TxtBrowserFixBadge= $win.FindName('TxtBrowserFixBadge')
@@ -612,7 +618,7 @@ function Set-Z2BusyUiState([bool]$IsBusy) {
         $ChkAutoHost, $ChkWarp, $ChkGameFilter, $ChkKernelFilter, $ChkNlmVpn, $BtnNlmConfig,
         $BtnBrowserFix, $ChkBrowserQuic, $BtnEditGenUser, $BtnEditExUser,
         $BtnAiToggle, $BtnAiProbe, $CmbAiMode, $BtnAiSelAll,
-        $ChkAi_gemini, $ChkAi_chatgpt, $ChkAi_claude, $ChkAi_copilot, $ChkAi_grok, $ChkAi_perplexity, $ChkAi_ide_ai, $BtnPause
+        $ChkAi_gemini, $ChkAi_chatgpt, $ChkAi_claude, $ChkAi_copilot, $ChkAi_grok, $ChkAi_perplexity, $ChkAi_ide_ai, $ChkAi_antigravity, $BtnPause
     )
     foreach ($ctrl in $mutControls) {
         if ($null -ne $ctrl) { $ctrl.IsEnabled = $enabled }
@@ -1341,6 +1347,7 @@ function Refresh-Dashboard {
                 if ($null -ne $chk) { $chk.IsChecked = ($selSvcList -contains $sid) }
             }
             if ($null -ne $TxtAiPendingHint) { $TxtAiPendingHint.Visibility = 'Collapsed' }
+            Update-Z2AiSpecialHints
             $vpnNowAi = $null
             if (Get-Command Get-Z2ActiveVpnInfo -ErrorAction SilentlyContinue) {
                 try { $vpnNowAi = Get-Z2ActiveVpnInfo } catch {}
@@ -2236,7 +2243,29 @@ if ($null -ne $BtnAiServices -and $null -ne $PnlAiServices) {
     })
 }
 
+function Update-Z2AiSpecialHints {
+    if ($null -ne $BdAiClaudeWarn) {
+        $BdAiClaudeWarn.Visibility = if ($null -ne $ChkAi_claude -and [bool]$ChkAi_claude.IsChecked) { 'Visible' } else { 'Collapsed' }
+    }
+    if ($null -ne $BdAiAntigravityHint) {
+        $BdAiAntigravityHint.Visibility = if ($null -ne $ChkAi_antigravity -and [bool]$ChkAi_antigravity.IsChecked) { 'Visible' } else { 'Collapsed' }
+    }
+}
+
+if ($null -ne $BtnAiAntigravityHelper) {
+    $BtnAiAntigravityHelper.Add_Click({
+        if (Get-Command Show-Z2AntigravityDialog -ErrorAction SilentlyContinue) {
+            if (Show-Z2AntigravityDialog $Root $win $AccentHex) {
+                if (Get-Command Refresh-Dashboard -ErrorAction SilentlyContinue) { Refresh-Dashboard }
+            }
+        } else {
+            try { Start-Process 'https://github.com/vanch150/kotek-antigravity-helper/releases/latest' } catch {}
+        }
+    })
+}
+
 function Sync-Z2AiSelectionUi {
+    Update-Z2AiSpecialHints
     $selIds = @(Get-Z2GuiCheckedAiServices)
     $selStr = ($selIds -join ',')
     if ($selIds.Count -gt 0) { $ToastBanner.Visibility = 'Collapsed'; $StatusRow.Visibility = 'Visible' }
@@ -2300,7 +2329,7 @@ foreach ($sid in @($script:AiServiceCheckMap.Keys)) {
 
 if ($null -ne $BtnAiSelAll) {
     $BtnAiSelAll.Add_Click({
-        $safeKeys = @($script:AiServiceCheckMap.Keys | Where-Object { $_ -ne 'claude' })
+        $safeKeys = @($script:AiServiceCheckMap.Keys | Where-Object { $_ -notin @('claude', 'antigravity') })
         $curSafeChecked = @($safeKeys | Where-Object { $c = $script:AiServiceCheckMap[$_]; $null -ne $c -and [bool]$c.IsChecked })
         $targetState = ($curSafeChecked.Count -lt $safeKeys.Count)
         foreach ($sid in $safeKeys) {

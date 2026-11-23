@@ -467,7 +467,6 @@ namespace ZapretTgWsProxy
                     catch (System.ComponentModel.Win32Exception wex)
                     {
                         if (!tryTls13 || certValidationFailed || (wex is SocketException)) throw;
-                        _tls13Supported = false;
                         fallbackTls12 = true;
                         needReconnect = true;
                     }
@@ -475,14 +474,12 @@ namespace ZapretTgWsProxy
                     {
                         if (!tryTls13 || certValidationFailed || !(ioEx.InnerException is System.ComponentModel.Win32Exception) || (ioEx.InnerException is SocketException))
                             throw;
-                        _tls13Supported = false;
                         fallbackTls12 = true;
                         needReconnect = true;
                     }
                     catch (System.Security.Authentication.AuthenticationException)
                     {
                         if (!tryTls13 || certValidationFailed) throw;
-                        _tls13Supported = false;
                         fallbackTls12 = true;
                         needReconnect = true;
                     }
@@ -1659,8 +1656,9 @@ namespace ZapretTgWsProxy
                     string wDom = CfWorkerDomains[i];
                     try
                     {
+                        int cfPort = DisableSecure ? 80 : 443;
                         RawWebSocket ws = await RawWebSocket.ConnectAsync(
-                            CleanCfAnycastIps[0], 443, wDom, path, wDom, true, BufferSize, 3200, "cf-worker:" + wDom).ConfigureAwait(false);
+                            CleanCfAnycastIps[0], cfPort, wDom, path, wDom, !DisableSecure, BufferSize, 3200, "cf-worker:" + wDom).ConfigureAwait(false);
                         return ws;
                     }
                     catch { }

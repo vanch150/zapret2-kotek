@@ -120,7 +120,8 @@ function Get-Z2AutoUpdateTask {
 function Build-Z2PerchFolderIcon {
     param(
         [string]$PerchPngPath,
-        [string]$OutIcoPath
+        [string]$OutIcoPath,
+        [string]$BadgePngPath = ''
     )
     try {
         Add-Type -AssemblyName System.Drawing -ErrorAction Stop
@@ -263,8 +264,53 @@ public static class Z2ShellFolderIcon {
             $g.DrawImage($perchBmp, (New-Object System.Drawing.Rectangle($catX, $catY, $catW, $catH)))
             $g.Dispose()
 
-            # Build multi-size PNG-compressed ICO (256/64/48/32 = perched Kotek, 16 = crisp native folder)
-            $sizes = @(256, 64, 48, 32, 16)
+            # Build crisp small-icon composite (folder + Kotek badge in bottom-right) for 16/20/24px table/list views
+            $smallComp = New-Object System.Drawing.Bitmap(64, 64, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+            $sg = [System.Drawing.Graphics]::FromImage($smallComp)
+            $sg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $sg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+            $sg.Clear([System.Drawing.Color]::Transparent)
+            $sg.DrawImage($folderBmp, (New-Object System.Drawing.Rectangle(0, 0, 58, 58)), $srcRect, [System.Drawing.GraphicsUnit]::Pixel)
+
+            $badgeMs = $null
+            $badgeBmp = $null
+            try {
+                if ($BadgePngPath -and (Test-Path -LiteralPath $BadgePngPath -PathType Leaf)) {
+                    $bBytes = [System.IO.File]::ReadAllBytes($BadgePngPath)
+                    $badgeMs = New-Object System.IO.MemoryStream(,$bBytes)
+                    $badgeBmp = New-Object System.Drawing.Bitmap($badgeMs)
+                }
+                $bSrc = if ($null -ne $badgeBmp) { $badgeBmp } else { $perchBmp }
+                # Trim transparent margins around badge sprite so Kotek fills the corner crisply
+                $bMinX = $bSrc.Width; $bMaxX = 0; $bMinY = $bSrc.Height; $bMaxY = 0
+                for ($by = 0; $by -lt $bSrc.Height; $by++) {
+                    for ($bx = 0; $bx -lt $bSrc.Width; $bx++) {
+                        if ($bSrc.GetPixel($bx, $by).A -gt 35) {
+                            if ($bx -lt $bMinX) { $bMinX = $bx }
+                            if ($bx -gt $bMaxX) { $bMaxX = $bx }
+                            if ($by -lt $bMinY) { $bMinY = $by }
+                            if ($by -gt $bMaxY) { $bMaxY = $by }
+                        }
+                    }
+                }
+                if ($bMaxX -gt $bMinX -and $bMaxY -gt $bMinY) {
+                    $bRect = New-Object System.Drawing.Rectangle($bMinX, $bMinY, ($bMaxX - $bMinX + 1), ($bMaxY - $bMinY + 1))
+                    $bTarget = 42
+                    $bScale = [Math]::Min(($bTarget / [double]$bRect.Width), ($bTarget / [double]$bRect.Height))
+                    $bw = [int][Math]::Round($bRect.Width * $bScale)
+                    $bh = [int][Math]::Round($bRect.Height * $bScale)
+                    $bxDst = 64 - $bw
+                    $byDst = 64 - $bh
+                    $sg.DrawImage($bSrc, (New-Object System.Drawing.Rectangle($bxDst, $byDst, $bw, $bh)), $bRect, [System.Drawing.GraphicsUnit]::Pixel)
+                }
+            } finally {
+                if ($null -ne $badgeBmp) { $badgeBmp.Dispose() }
+                if ($null -ne $badgeMs) { $badgeMs.Dispose() }
+                $sg.Dispose()
+            }
+
+            # Build multi-size PNG-compressed ICO (256/64/48/32 = perched Kotek, 24/20/16 = folder + Kotek badge)
+            $sizes = @(256, 64, 48, 32, 24, 20, 16)
             $pngBlobs = New-Object System.Collections.Generic.List[byte[]]
             foreach ($sz in $sizes) {
                 $layer = New-Object System.Drawing.Bitmap($sz, $sz, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
@@ -272,8 +318,8 @@ public static class Z2ShellFolderIcon {
                 $lg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
                 $lg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
                 $lg.Clear([System.Drawing.Color]::Transparent)
-                if ($sz -eq 16) {
-                    $lg.DrawImage($folderBmp, (New-Object System.Drawing.Rectangle(0, 0, 16, 16)))
+                if ($sz -le 24) {
+                    $lg.DrawImage($smallComp, (New-Object System.Drawing.Rectangle(0, 0, $sz, $sz)))
                 } else {
                     $lg.DrawImage($comp256, (New-Object System.Drawing.Rectangle(0, 0, $sz, $sz)))
                 }
@@ -284,6 +330,7 @@ public static class Z2ShellFolderIcon {
                 $ms.Dispose()
                 $layer.Dispose()
             }
+            $smallComp.Dispose()
             $comp256.Dispose()
 
             # Write ICO binary
@@ -349,7 +396,8 @@ function Set-Z2DesktopAndFolderIcons([string]$Root, [switch]$FolderOnly) {
         $folderIco = Join-Path $Root 'utils\kotek_folder.ico'
         $builtIco = $false
         if (Test-Path -LiteralPath $perchPng) {
-            $builtIco = Build-Z2PerchFolderIcon -PerchPngPath $perchPng -OutIcoPath $folderIco
+            $happyPng = Join-Path $Root 'utils\kotek_happy.png'
+            $builtIco = Build-Z2PerchFolderIcon -PerchPngPath $perchPng -OutIcoPath $folderIco -BadgePngPath $happyPng
         }
         if ($builtIco -and (Test-Path -LiteralPath $folderIco)) {
             $rootClean = $Root.TrimEnd('\')

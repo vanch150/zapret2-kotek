@@ -277,7 +277,7 @@ function Ensure-TgWsBinary {
     $outArg = "`"/out:$tmpExe`""
     $csArg  = "`"$CsPath`""
     $p = Start-Process -FilePath $csc -ArgumentList @(
-        '/nologo', '/optimize+', '/target:exe',
+        '/nologo', '/optimize+', '/target:exe', '/platform:anycpu',
         '/r:System.dll', '/r:System.Core.dll', '/r:System.ServiceProcess.dll',
         $outArg, $csArg
     ) -NoNewWindow -Wait -PassThru

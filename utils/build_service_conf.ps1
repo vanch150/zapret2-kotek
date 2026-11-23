@@ -409,24 +409,34 @@ if ($autoHostOn -and $listsDir) {
     }
 }
 
-# 3a. Ensure the first QUIC UDP 443 hostlist profile also covers list-google.txt (googlevideo.com / YouTube HTTP/3)
+# 3a. Ensure QUIC UDP 443 covers list-google.txt without duplicating/shadowing existing QUIC google profiles
 if ($listsDir) {
     $googleListArg = '--hostlist=' + $listsDir + 'list-google.txt'
+    $anyQuicHasGoogle = $false
     foreach ($p in $activeProfiles) {
-        $isQuic443 = $false
-        $isQuicL7 = $false
-        $hasGenList = $false
-        $hasGoogleList = $false
-        $genIdx = -1
+        $isQ443 = $false; $isQL7 = $false; $hasG = $false
         for ($j = 0; $j -lt $p.Count; $j++) {
-            if ($p[$j] -match '(?i)^--filter-udp=.*\b443\b') { $isQuic443 = $true }
-            if ($p[$j] -match '(?i)^--filter-l7=.*\bquic\b') { $isQuicL7 = $true }
-            if ($p[$j] -match '(?i)^--hostlist=.*list-general\.txt$') { $hasGenList = $true; $genIdx = $j }
-            if ($p[$j] -match '(?i)^--hostlist=.*list-google\.txt$') { $hasGoogleList = $true }
+            if ($p[$j] -match '(?i)^--filter-udp=.*\b443\b') { $isQ443 = $true }
+            if ($p[$j] -match '(?i)^--filter-l7=.*\bquic\b') { $isQL7 = $true }
+            if ($p[$j] -match '(?i)^--hostlist=.*list-google\.txt$') { $hasG = $true }
         }
-        if ($isQuic443 -and $isQuicL7 -and $hasGenList -and -not $hasGoogleList -and $genIdx -ge 0) {
-            $p.Insert($genIdx + 1, $googleListArg)
-            break
+        if ($isQ443 -and $isQL7 -and $hasG) { $anyQuicHasGoogle = $true; break }
+    }
+    if (-not $anyQuicHasGoogle) {
+        foreach ($p in $activeProfiles) {
+            $isQuic443 = $false
+            $isQuicL7 = $false
+            $hasGenList = $false
+            $genIdx = -1
+            for ($j = 0; $j -lt $p.Count; $j++) {
+                if ($p[$j] -match '(?i)^--filter-udp=.*\b443\b') { $isQuic443 = $true }
+                if ($p[$j] -match '(?i)^--filter-l7=.*\bquic\b') { $isQuicL7 = $true }
+                if ($p[$j] -match '(?i)^--hostlist=.*list-general\.txt$') { $hasGenList = $true; $genIdx = $j }
+            }
+            if ($isQuic443 -and $isQuicL7 -and $hasGenList -and $genIdx -ge 0) {
+                $p.Insert($genIdx + 1, $googleListArg)
+                break
+            }
         }
     }
 }

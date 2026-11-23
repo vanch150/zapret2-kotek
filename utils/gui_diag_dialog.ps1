@@ -67,6 +67,38 @@ function Show-Z2DiagDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="DiagDarkCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#D4D7DD"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Grid Background="Transparent">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="box" Grid.Column="0" Width="16" Height="16" CornerRadius="4" Background="#1E2026" BorderBrush="#3A3F4B" BorderThickness="1" VerticalAlignment="Center">
+                                <Path x:Name="mark" Data="M 3,8 L 6.5,11.5 L 13,4.5" Stroke="#FFFFFF" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed"/>
+                            </Border>
+                            <ContentPresenter Grid.Column="1" Margin="6,0,0,0" VerticalAlignment="Center"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="box" Property="Background" Value="__ACCENT__"/>
+                                <Setter TargetName="box" Property="BorderBrush" Value="__ACCENT__"/>
+                                <Setter TargetName="mark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="box" Property="BorderBrush" Value="__ACCENT__"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="18,16">
@@ -105,18 +137,18 @@ function Show-Z2DiagDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4
             <StackPanel>
                 <TextBlock Text="Что именно не работает? (отметь перед отправкой, по желанию)" FontSize="11.5" Foreground="#9CA3AF" Margin="0,0,0,5"/>
                 <WrapPanel Orientation="Horizontal">
-                    <CheckBox x:Name="ChkSymYtDown" Content="YouTube не грузит" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
-                    <CheckBox x:Name="ChkSymYtSlow" Content="YouTube тормозит / качество" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
-                    <CheckBox x:Name="ChkSymDcVoice" Content="Discord голос / стрим" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
-                    <CheckBox x:Name="ChkSymTg" Content="Telegram" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
-                    <CheckBox x:Name="ChkSymFlaky" Content="То работает, то нет" Foreground="#D4D7DD" FontSize="12" Margin="0,0,12,3"/>
-                    <CheckBox x:Name="ChkSymOther" Content="Другое" Foreground="#D4D7DD" FontSize="12" Margin="0,0,0,3"/>
+                    <CheckBox x:Name="ChkSymYtDown" Content="YouTube не грузит" Style="{StaticResource DiagDarkCheckBox}" Margin="0,0,14,5"/>
+                    <CheckBox x:Name="ChkSymYtSlow" Content="YouTube тормозит / качество" Style="{StaticResource DiagDarkCheckBox}" Margin="0,0,14,5"/>
+                    <CheckBox x:Name="ChkSymDcVoice" Content="Discord голос / стрим" Style="{StaticResource DiagDarkCheckBox}" Margin="0,0,14,5"/>
+                    <CheckBox x:Name="ChkSymTg" Content="Telegram" Style="{StaticResource DiagDarkCheckBox}" Margin="0,0,14,5"/>
+                    <CheckBox x:Name="ChkSymFlaky" Content="То работает, то нет" Style="{StaticResource DiagDarkCheckBox}" Margin="0,0,14,5"/>
+                    <CheckBox x:Name="ChkSymOther" Content="Другое" Style="{StaticResource DiagDarkCheckBox}" Margin="0,0,0,5"/>
                 </WrapPanel>
             </StackPanel>
         </Border>
 
         <!-- Hint -->
-        <TextBlock x:Name="TxtDiagHint" Grid.Row="3" Text="Отчёт уже скопирован в буфер обмена — при необходимости вставь его в Telegram (Ctrl+V)." FontSize="11.5" Foreground="#9CA3AF" Margin="2,6,2,8" TextWrapping="Wrap"/>
+        <TextBlock x:Name="TxtDiagHint" Grid.Row="3" Text="Отметь симптомы выше и нажми «Отправить разработчику» — обезличенный отчёт уйдёт напрямую (без личных данных)." FontSize="11.5" Foreground="#9CA3AF" Margin="2,6,2,8" TextWrapping="Wrap"/>
 
         <!-- Footer -->
         <Grid Grid.Row="4">
@@ -126,8 +158,8 @@ function Show-Z2DiagDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <StackPanel Grid.Column="0" Orientation="Horizontal">
-                <Button x:Name="BtnDiagCopy" Content="Скопировать отчёт" Style="{StaticResource DiagPrimaryBtn}" Margin="0,0,8,0"/>
-                <Button x:Name="BtnDiagSend" Content="Отправить разработчику" Style="{StaticResource DiagSecBtn}" Margin="0,0,8,0" ToolTip="Отправить обезличенный отчёт напрямую разработчику (или открыть GitHub Issue)"/>
+                <Button x:Name="BtnDiagSend" Content="Отправить разработчику" Style="{StaticResource DiagPrimaryBtn}" Margin="0,0,8,0" ToolTip="Отправить обезличенный отчёт напрямую разработчику (или открыть GitHub Issue)"/>
+                <Button x:Name="BtnDiagCopy" Content="Скопировать отчёт" Style="{StaticResource DiagSecBtn}" Margin="0,0,8,0"/>
                 <Button x:Name="BtnDiagOpenTxt" Content="Открыть .txt" Style="{StaticResource DiagSecBtn}"/>
             </StackPanel>
             <Button x:Name="BtnDiagClose" Grid.Column="2" Content="Закрыть" Style="{StaticResource DiagSecBtn}"/>
@@ -165,6 +197,15 @@ function Show-Z2DiagDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4
     $TxtDiagHint    = $dlg.FindName('TxtDiagHint')
     $BtnDiagCopy    = $dlg.FindName('BtnDiagCopy')
     $BtnDiagSend    = $dlg.FindName('BtnDiagSend')
+    try {
+        $ar = [Convert]::ToInt32($accent.Substring(1, 2), 16)
+        $ag = [Convert]::ToInt32($accent.Substring(3, 2), 16)
+        $ab = [Convert]::ToInt32($accent.Substring(5, 2), 16)
+        $lum = (0.299 * $ar) + (0.587 * $ag) + (0.114 * $ab)
+        if ($null -ne $BtnDiagSend) {
+            $BtnDiagSend.Foreground = (New-Object System.Windows.Media.BrushConverter).ConvertFromString($(if ($lum -lt 145) { '#FFFFFF' } else { '#121316' }))
+        }
+    } catch {}
     $symChecks = @(
         @{ Ctrl = $dlg.FindName('ChkSymYtDown');  Tag = 'yt_down' },
         @{ Ctrl = $dlg.FindName('ChkSymYtSlow');  Tag = 'yt_slow' },
@@ -291,7 +332,7 @@ function Show-Z2DiagDialog([string]$Root, $OwnerWin, [string]$AccentHex = '#7BC4
             try {
                 $rawRep = Get-Content -LiteralPath $txtPath -Raw -Encoding UTF8
                 Set-Clipboard -Value $rawRep
-                $TxtDiagHint.Text = 'Отчёт скопирован в буфер обмена (Ctrl+V в Telegram).'
+                $TxtDiagHint.Text = 'Отчёт скопирован в буфер обмена (Ctrl+V).'
                 $TxtDiagHint.Foreground = $bc.ConvertFromString($accent)
             } catch {
                 $TxtDiagHint.Text = 'Не удалось скопировать в буфер — открой .txt вручную.'

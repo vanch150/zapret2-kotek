@@ -250,7 +250,7 @@ try {
 } catch {}
 if ($proxyOn) {
     $safeProxySrv = ($proxySrv -replace '://[^@\s]+@', '://<REDACTED>@') -replace '([=;]|^)[^=;\s/]+:[^@\s]+@', '$1<REDACTED>@'
-    Add-DiagCheck 'proxy' 'Системный прокси Windows' 'WARN' "Включён системный прокси: $safeProxySrv" 'NLM не перехватывает HTTP/SOCKS-прокси. Если ты не пользуешься сейчас V2RayN/Nekoray/Clash, выключи прокси в Параметрах Windows -> Сеть и Интернет -> Прокси.'
+    Add-DiagCheck 'proxy' 'Системный прокси Windows' 'WARN' "Включён системный прокси: $safeProxySrv" 'WinDivert-фильтр VPN не перехватывает HTTP/SOCKS-прокси. Если ты не пользуешься сейчас V2RayN/Nekoray/Clash, выключи прокси в Параметрах Windows -> Сеть и Интернет -> Прокси.'
 } else {
     Add-DiagCheck 'proxy' 'Системный прокси Windows' 'OK' 'Выключен' ''
 }
@@ -324,7 +324,7 @@ function Invoke-Z2DiagProbe([string]$Url, [int]$MaxSec = 5) {
         if ($p.Count -ge 1 -and $p[0]) { $res.Code = $p[0].Trim() }
         if ($p.Count -ge 2) { [void][long]::TryParse($p[1].Trim(), [ref]$res.Bytes) }
         if ($p.Count -ge 3) { [void][double]::TryParse($p[2].Trim().Replace(',', '.'), [System.Globalization.NumberStyles]::Float, $invC, [ref]$res.Speed) }
-        if ($p.Count -ge 4 -and $p[3].Trim() -match '^\d+$') { $res.Exit = [int]$p[3].Trim() } else { $res.Exit = 0 }
+        if ($p.Count -ge 4 -and $p[3].Trim() -match '^\d+$') { $res.Exit = [int]$p[3].Trim() } else { $res.Exit = $LASTEXITCODE }
         $kb = [int][Math]::Round($res.Bytes / 1024.0)
         $kbs = [int][Math]::Round($res.Speed / 1024.0)
         $res.Label = if ($res.Exit -eq 0) { "$($res.Code) (${kb}KB, ${kbs}KB/s)" } else { "$($res.Code) (e=$($res.Exit), ${kb}KB)" }
@@ -480,6 +480,7 @@ if (Test-Path -LiteralPath $logPath) {
         $redacted = $redacted -replace '(?i)(cfproxy_domain\s*[:=]\s*)\S+', '$1<REDACTED_DOMAIN>'
         $redacted = $redacted -replace '(?i)(cfproxy_worker_domain\s*[:=]\s*)\S+', '$1<REDACTED_DOMAIN>'
         $redacted = $redacted -replace '://[^@]+@', '://<REDACTED>@'
+        $redacted = $redacted -replace '(?i)([A-Z]:\\Users\\)[^\\\s"'']+', '$1<USER>'
         [void]$sb.AppendLine($redacted)
     }
 }

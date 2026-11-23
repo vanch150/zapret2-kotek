@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/vanch150/zapret2-kotek/releases/latest"><strong>Скачать v1.1.1</strong></a> ·
+  <a href="https://github.com/vanch150/zapret2-kotek/releases/latest"><strong>Скачать v1.1.2</strong></a> ·
   <a href="https://github.com/vanch150/zapret2-kotek/releases">Все релизы</a> ·
   <a href="#зачем-этот-проект">О проекте</a> ·
   <a href="#быстрый-старт">Установка</a> ·
@@ -27,7 +27,7 @@
 ## Чем отличается от обычных батников
 
 - **Автоматический подбор вместо ручного перебора.** Программа сама тестирует готовые стратегии на вашем интернете (YouTube, Discord, 7TV, Cloudflare) и выбирает рабочую. Если провайдер режет трафик по-разному для разных сервисов, сборка умеет склеить персональный гибридный конфиг из лучших вариантов.
-- **Telegram и нейросети без сторонних VPN.** Внутрь встроен собственный локальный MTProto-прокси для Telegram Desktop (написан на C#, работает только на `127.0.0.1`) и точечный обход для ИИ-сервисов (Gemini, ChatGPT, Claude, Copilot, Grok, Perplexity, Cursor / Windsurf). Остальной интернет, банки и игры при этом идут напрямую, системный DNS провайдера не ломается.
+- **Telegram и нейросети без сторонних VPN.** Внутрь встроен собственный локальный MTProto-прокси для Telegram Desktop (написан на C#, работает только на `127.0.0.1`) и точечный обход для ИИ-сервисов (Gemini, ChatGPT, Claude, Copilot, Grok, Perplexity, Cursor / Windsurf, а также Google Antigravity с подключаемым [модулем для РФ-аккаунтов](https://github.com/vanch150/kotek-antigravity-helper)). Остальной интернет, банки и игры при этом идут напрямую, системный DNS провайдера не ломается.
 - **Уживается с играми и VPN.** Популярные VPN-клиенты (WARP, Happ, WireGuard, AmneziaWG, OpenVPN) исключаются на уровне сетевых интерфейсов (WinDivert) и работают параллельно с обходом без пауз. Если нужно зайти в игру со строгим античитом (Vanguard, FACEIT, EAC, BattlEye), обход можно полностью выгрузить вместе с драйвером в один клик, а потом так же вернуть.
 - **Всё открыто и проверяется.** Движок `winws2.exe` и драйвер `WinDivert` взяты напрямую из [bol-van/zapret2](https://github.com/bol-van/zapret2), списки и фейки — на базе [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube). Обновления выходят только здесь и проверяются по контрольным суммам `SHA256SUMS.txt`.
 
@@ -36,7 +36,7 @@
 
 ## Быстрый старт
 
-1. Скачайте `zapret2-kotek-v1.1.1.zip` со страницы [Releases](https://github.com/vanch150/zapret2-kotek/releases/latest) и распакуйте в папку с английским путём (например, `C:\Zapret2`).
+1. Скачайте `zapret2-kotek-v1.1.2.zip` со страницы [Releases](https://github.com/vanch150/zapret2-kotek/releases/latest) и распакуйте в папку с английским путём (например, `C:\Zapret2`).
 2. Запустите `!_START_KOTEK.bat` и подтвердите права администратора.
 3. Запустите быструю настройку прямо в открывшемся окне — через 1–2 минуты службы поднимутся и заработают в фоне. После этого окно можно закрыть, при перезагрузке ПК всё стартует само.
 
@@ -62,7 +62,7 @@
 </td>
 <td width="50%">
 <img src="docs/screenshots/nlm_dialog.png" alt="Исключение VPN-адаптеров" />
-<p align="center"><sub>Исключение VPN-адаптеров (NLM)</sub></p>
+<p align="center"><sub>Исключение VPN-адаптеров (WinDivert)</sub></p>
 </td>
 </tr>
 </table>

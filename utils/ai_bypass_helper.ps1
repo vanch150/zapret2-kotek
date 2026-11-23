@@ -85,6 +85,24 @@ $script:Z2AiCatalog = @(
             '.windsurf.com',
             '.codeium.com'
         )
+    },
+    [PSCustomObject]@{
+        Id        = 'antigravity'
+        Name      = 'Google Antigravity'
+        ProbeHost = 'antigravity.google'
+        Domains   = @(
+            '.antigravity.google',
+            '.antigravity.google.com',
+            '.antigravity-unleash.goog',
+            '.cloudcode-pa.googleapis.com',
+            '.daily-cloudcode-pa.googleapis.com',
+            '.aicode.googleapis.com',
+            '.businessaicode.googleapis.com',
+            '.cloudaicompanion.googleapis.com',
+            '.jetski-webchannel.googleapis.com',
+            '.antigravity-cli-auto-updater-974169037036.us-central1.run.app',
+            '.antigravity-hub-auto-updater-974169037036.us-central1.run.app'
+        )
     }
 )
 
@@ -410,7 +428,8 @@ function Test-Z2AiSmartDns([string]$DnsIp, [string]$TestHost = 'gemini.google.co
     $res.ResolvedIp = $resolvedIp
     $curlExe = "$env:SystemRoot\System32\curl.exe"
     if (Test-Path -LiteralPath $curlExe) {
-        $rawProbe = [string](& $curlExe -4 -s -o NUL -w '%{http_code}|%{redirect_url}' --max-time 4 --resolve "${TestHost}:443:$resolvedIp" "https://$TestHost" 2>$null)
+        $probeUrl = if ($TestHost -ieq 'gemini.google.com') { 'https://gemini.google.com/app' } else { "https://$TestHost" }
+        $rawProbe = [string](& $curlExe -4 -s -o NUL -w '%{http_code}|%{redirect_url}' --max-time 4 --resolve "${TestHost}:443:$resolvedIp" $probeUrl 2>$null)
         $pParts = $rawProbe.Trim() -split '\|', 2
         if ($pParts.Count -ge 1 -and $pParts[0]) { $res.HttpCode = $pParts[0].Trim() }
         $redirUrl = if ($pParts.Count -ge 2) { $pParts[1].Trim() } else { '' }
