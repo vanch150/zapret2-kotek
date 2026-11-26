@@ -2014,7 +2014,7 @@ $BtnProbeStrat.Add_Click({
 
 $BtnAutoSetup.Add_Click({ Run-ConsoleTool 'utils\auto_setup.ps1' '-NonInteractive' $false 'Автонастройка' $BtnAutoSetup })
 $BtnDeepOpt.Add_Click({ Run-ConsoleTool 'utils\deep_optimize.ps1' '-NonInteractive' $false 'Глубокий тест (22 стратегии)' $BtnDeepOpt })
-$BtnStrategyBuilder.Add_Click({ Run-ConsoleTool 'utils\strategy_builder.ps1' '' $false 'Конструктор стратегии (5 мин)' $BtnStrategyBuilder })
+$BtnStrategyBuilder.Add_Click({ Run-ConsoleTool 'utils\strategy_builder.ps1' '-NonInteractive' $false 'Конструктор стратегии (5 мин)' $BtnStrategyBuilder })
 $BtnUdpOpt.Add_Click({ Run-ConsoleTool 'utils\fake_selector.ps1' '-Action auto' $false 'Подбор UDP-фейка' $BtnUdpOpt })
 if ($null -ne $ChkUdpManual) {
     $ChkUdpManual.Add_Click({

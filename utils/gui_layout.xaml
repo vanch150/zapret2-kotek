@@ -762,7 +762,7 @@
                                         <TextBlock Text="Максимум" FontSize="12.5" FontWeight="SemiBold" Foreground="{{ACCENT_LIGHT_HEX}}"/>
                                     </Border>
                                 </StackPanel>
-                                <TextBlock Grid.Row="1" Text="Проверит все 22 стратегии по 27 целям и склеит лучший конфиг под твой ПК (YouTube + Discord + Web)." FontSize="14.5" Foreground="#9CA3AF" LineHeight="18" Margin="0,8,0,14" TextWrapping="Wrap"/>
+                                <TextBlock Grid.Row="1" Text="Проверит все стратегии (базовые + архив) по 27 целям и склеит лучший конфиг под твой ПК (YouTube + Discord + Web)." FontSize="14.5" Foreground="#9CA3AF" LineHeight="18" Margin="0,8,0,14" TextWrapping="Wrap"/>
                                 <Grid Grid.Row="2">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
