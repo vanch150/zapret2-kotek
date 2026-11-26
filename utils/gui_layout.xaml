@@ -763,7 +763,15 @@
                                     </Border>
                                 </StackPanel>
                                 <TextBlock Grid.Row="1" Text="Проверит все 22 стратегии по 27 целям и склеит лучший конфиг под твой ПК (YouTube + Discord + Web)." FontSize="14.5" Foreground="#9CA3AF" LineHeight="18" Margin="0,8,0,14" TextWrapping="Wrap"/>
-                                <Button x:Name="BtnDeepOpt" Grid.Row="2" Content="Собрать под себя" Style="{StaticResource SecondaryBtn}" BorderBrush="{StaticResource AccentBorderBrush}" HorizontalAlignment="Stretch" Padding="14,9"/>
+                                <Grid Grid.Row="2">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="8"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="BtnDeepOpt" Grid.Column="0" Content="Собрать под себя" Style="{StaticResource SecondaryBtn}" BorderBrush="{StaticResource AccentBorderBrush}" HorizontalAlignment="Stretch" Padding="12,9"/>
+                                    <Button x:Name="BtnStrategyBuilder" Grid.Column="2" Content="Конструктор 5 мин" Style="{StaticResource SecondaryBtn}" Padding="12,9" ToolTip="Пошагово подбирает и собирает уникальную стратегию zapret2 с нуля под твоего провайдера за 3–5 минут"/>
+                                </Grid>
                             </Grid>
                         </Border>
                     </Grid>

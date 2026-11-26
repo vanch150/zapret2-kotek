@@ -214,6 +214,7 @@ $BtnTabCore      = $win.FindName('BtnTabCore')
 $BtnTabArch      = $win.FindName('BtnTabArch')
 $BtnApplyStrat   = $win.FindName('BtnApplyStrat')
 $BtnDeepOpt      = $win.FindName('BtnDeepOpt')
+$BtnStrategyBuilder = $win.FindName('BtnStrategyBuilder')
 $BtnAutoSetup    = $win.FindName('BtnAutoSetup')
 $BtnTgConnect    = $win.FindName('BtnTgConnect')
 $BtnUdpOpt       = $win.FindName('BtnUdpOpt')
@@ -619,7 +620,7 @@ $script:AgNeedPatchToasted = $false
 function Set-Z2BusyUiState([bool]$IsBusy) {
     $enabled = -not $IsBusy
     $mutControls = @(
-        $BtnAutoSetup, $BtnDeepOpt, $BtnApplyStrat, $BtnProbeStrat, $BtnSynthStrat, $BtnAddStrat,
+        $BtnAutoSetup, $BtnDeepOpt, $BtnStrategyBuilder, $BtnApplyStrat, $BtnProbeStrat, $BtnSynthStrat, $BtnAddStrat,
         $BtnTgConnect, $BtnTgToggle, $BtnUdpOpt, $CmbUdpFake, $CmbQuickStrat, $CmbTgMode,
         $CmbIpsetMode, $BtnDiag, $BtnUpdateLists, $BtnCheckUpdate, $BtnUninstall,
         $ChkAutoHost, $ChkWarp, $ChkGameFilter, $ChkKernelFilter, $ChkNlmVpn, $BtnNlmConfig,
@@ -1048,6 +1049,7 @@ function Load-Strategies([string]$tab) {
 
     $stratMetaMap = @{
         'custom_auto_synthesized'  = @('Гибрид',        'Персональный гибрид YouTube + Discord + Web под твоего провайдера')
+        'custom_built_for_me'      = @('Конструктор',   'Уникальная стратегия, собранная конструктором с нуля под твоего провайдера')
         'general (ALT12)'          = @('hostfakesplit', 'Подмена SNI + multisplit — часто лучшая для YouTube 1080p и 7TV')
         'general (ALT11)'          = @('multisplit',    'Агрессивный fake (tcp_ts) + multisplit seqovl — быстрая универсальная база')
         'general (ALT)'            = @('fakedsplit',    'Классический fakedsplit + tcp_ts — стабильная база для большинства сетей')
@@ -1830,7 +1832,7 @@ function Run-ConsoleTool([string]$ScriptRel, [string]$ExtraArgs = '', [bool]$Kee
         $BarActiveTask.Value = 0
     }
     Set-Z2BusyUiState $true
-    $script:ActiveTaskEtaBase  = if ($ScriptRel -match 'deep_optimize') { 'обычно ~2–4 мин' } elseif ($ScriptRel -match 'auto_setup') { 'обычно ~1–2 мин' } elseif ($ScriptRel -match 'probe_one') { 'обычно ~5–10 сек' } else { 'обычно ~5–15 сек' }
+    $script:ActiveTaskEtaBase  = if ($ScriptRel -match 'deep_optimize') { 'обычно ~2–4 мин' } elseif ($ScriptRel -match 'strategy_builder') { 'обычно ~3–5 мин' } elseif ($ScriptRel -match 'auto_setup') { 'обычно ~1–2 мин' } elseif ($ScriptRel -match 'probe_one') { 'обычно ~5–10 сек' } else { 'обычно ~5–15 сек' }
     if ($null -ne $TxtActiveTaskEta) { $TxtActiveTaskEta.Text = $script:ActiveTaskEtaBase }
     $TxtActiveTaskTitle.Text = "Выполняется: $($script:ActiveTaskLabel)"
     $TxtActiveTaskStep.Text  = "Запуск задачи..."
@@ -1839,7 +1841,7 @@ function Run-ConsoleTool([string]$ScriptRel, [string]$ExtraArgs = '', [bool]$Kee
     $AutoDoneCard.Visibility = 'Collapsed'
     if ($null -ne $BtnCancelHybrid) { $BtnCancelHybrid.Visibility = if ($script:ActiveTaskKind -eq 'hybrid') { 'Visible' } else { 'Collapsed' } }
     $ActiveTaskCard.Visibility = 'Visible'
-    if ($ScriptRel -match 'auto_setup|deep_optimize|probe_one|fake_selector|apply_strategy') {
+    if ($ScriptRel -match 'auto_setup|deep_optimize|strategy_builder|probe_one|fake_selector|apply_strategy') {
         $bcBusy = $script:BrushConv
         $TxtZapretState.Text = '◐ Тестирование'
         $TxtZapretState.Foreground = $bcBusy.ConvertFromString('#D9B066')
@@ -2009,6 +2011,7 @@ $BtnProbeStrat.Add_Click({
 
 $BtnAutoSetup.Add_Click({ Run-ConsoleTool 'utils\auto_setup.ps1' '-NonInteractive' $false 'Автонастройка' $BtnAutoSetup })
 $BtnDeepOpt.Add_Click({ Run-ConsoleTool 'utils\deep_optimize.ps1' '-NonInteractive' $false 'Глубокий тест (22 стратегии)' $BtnDeepOpt })
+$BtnStrategyBuilder.Add_Click({ Run-ConsoleTool 'utils\strategy_builder.ps1' '' $false 'Конструктор стратегии (5 мин)' $BtnStrategyBuilder })
 $BtnUdpOpt.Add_Click({ Run-ConsoleTool 'utils\fake_selector.ps1' '-Action auto' $false 'Подбор UDP-фейка' $BtnUdpOpt })
 if ($null -ne $ChkUdpManual) {
     $ChkUdpManual.Add_Click({

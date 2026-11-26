@@ -30,6 +30,7 @@ lists/ipset-all.txt.backup
 lists/list-exclude.effective.txt
 custom_auto_synthesized.bat
 strategies/custom_auto_synthesized.bat
+strategies/custom_built_for_me.bat
 SHA256SUMS.txt
 *.zip
 bin/*.log.*
