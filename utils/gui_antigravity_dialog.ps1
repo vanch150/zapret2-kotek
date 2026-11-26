@@ -11,6 +11,54 @@ function Find-Z2AntigravityModuleScript([string]$Root) {
     return ''
 }
 
+function Find-Z2AntigravityExe {
+    $roots = New-Object System.Collections.Generic.List[string]
+    foreach ($cand in @(
+        (Join-Path $env:LOCALAPPDATA 'Programs'),
+        $env:LOCALAPPDATA,
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)},
+        (Join-Path $env:USERPROFILE 'scoop\apps')
+    )) {
+        if ($cand -and (Test-Path -LiteralPath $cand -PathType Container)) { $roots.Add($cand) }
+    }
+    foreach ($regRoot in @(
+        'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )) {
+        foreach ($item in (Get-ItemProperty -Path $regRoot -ErrorAction SilentlyContinue)) {
+            if ($item.DisplayName -and ($item.DisplayName -match '(?i)Antigravity')) {
+                if ($item.InstallLocation -and (Test-Path -LiteralPath $item.InstallLocation -PathType Container)) {
+                    $roots.Add($item.InstallLocation)
+                }
+                if ($item.DisplayIcon) {
+                    $ic = ([string]$item.DisplayIcon).Split(',')[0].Trim().Trim('"')
+                    if ($ic -match '(?i)Antigravity.*\.exe$' -and (Test-Path -LiteralPath $ic -PathType Leaf)) {
+                        return [System.IO.Path]::GetFullPath($ic)
+                    }
+                }
+            }
+        }
+    }
+    $exeNames = @('Antigravity.exe', 'Antigravity IDE.exe')
+    foreach ($r in @($roots | Select-Object -Unique)) {
+        foreach ($en in $exeNames) {
+            $p1 = Join-Path $r $en
+            if (Test-Path -LiteralPath $p1 -PathType Leaf) { return [System.IO.Path]::GetFullPath($p1) }
+        }
+        foreach ($sub in (Get-ChildItem -LiteralPath $r -Directory -Filter '*Antigravity*' -ErrorAction SilentlyContinue)) {
+            foreach ($en in $exeNames) {
+                $p2 = Join-Path $sub.FullName $en
+                if (Test-Path -LiteralPath $p2 -PathType Leaf) { return [System.IO.Path]::GetFullPath($p2) }
+                $p3 = Join-Path $sub.FullName ("current\$en")
+                if (Test-Path -LiteralPath $p3 -PathType Leaf) { return [System.IO.Path]::GetFullPath($p3) }
+            }
+        }
+    }
+    return ''
+}
+
 function Start-Z2AgAsyncCmd([string]$ScriptPath, [string]$ActionArgs) {
     $outFile = Join-Path $env:TEMP ("z2_ag_out_" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + ".txt")
     $escScript = $ScriptPath.Replace("'", "''")
@@ -69,7 +117,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Мастер настройки Google Antigravity — Zapret2 Kotek"
-        Width="650" Height="510" MinWidth="600" MinHeight="470"
+        Width="670" Height="560" MinWidth="620" MinHeight="510"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         Background="#121316" Foreground="#D4D7DD" FontFamily="Segoe UI">
     <Window.Resources>
@@ -112,6 +160,38 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="bd" Property="Background" Value="#2A2E37"/></Trigger>
                             <Trigger Property="IsEnabled" Value="False"><Setter TargetName="bd" Property="Opacity" Value="0.38"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="AgDarkCheckBox" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#D4D7DD"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Background="Transparent">
+                            <Border x:Name="box" Width="17" Height="17" CornerRadius="4" Background="#181B22" BorderBrush="#3D4352" BorderThickness="1.5" VerticalAlignment="Center" Margin="0,0,8,0">
+                                <Path x:Name="checkMark" Data="M 0,4.2 L 3.2,7.4 L 9.4,0.8" Width="9.5" Height="8" Stretch="Uniform" Stroke="#111316" StrokeThickness="2.1" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ContentPresenter VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                        </StackPanel>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="box" Property="BorderBrush" Value="__ACCENT__"/>
+                                <Setter TargetName="box" Property="Background" Value="#20242E"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="box" Property="Background" Value="__ACCENT__"/>
+                                <Setter TargetName="box" Property="BorderBrush" Value="__ACCENT__"/>
+                                <Setter TargetName="checkMark" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
@@ -198,23 +278,38 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
                     <StackPanel Grid.Row="0" Margin="0,0,0,10">
                         <TextBlock Text="Шаг 3 · Применение патча (с бэкапом *.agybak)" FontSize="15" FontWeight="SemiBold" Foreground="#F1F3F5"/>
+                        <Border x:Name="BdStep3DnsNote" Background="#14161B" BorderBrush="#262A33" BorderThickness="1" CornerRadius="6" Padding="10,6" Margin="0,6,0,0" Visibility="Collapsed">
+                            <TextBlock Text="SmartDNS выключен (подходит, если используешь свой VPN) · вернуться к настройке сети можно кнопкой «← Назад»" FontSize="11.5" Foreground="#9CA3AF" TextWrapping="Wrap"/>
+                        </Border>
                         <TextBlock x:Name="TxtStep3ProcWarn" Text="Проверяю запущенные процессы Antigravity..." FontSize="12.5" Foreground="#9CA3AF" Margin="0,5,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
 
-                    <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,10">
-                        <Button x:Name="BtnStep3Patch" Content="Применить патч" Style="{StaticResource AgPrimaryBtn}" Margin="0,0,8,0"/>
-                        <Button x:Name="BtnStep3Status" Content="Проверить статус" Style="{StaticResource AgSecBtn}" Margin="0,0,8,0"/>
-                        <Button x:Name="BtnStep3Restore" Content="Откатить (.agybak)" Style="{StaticResource AgSecBtn}"/>
-                    </StackPanel>
+                    <WrapPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,4">
+                        <Button x:Name="BtnStep3Patch" Content="Применить патч" Style="{StaticResource AgPrimaryBtn}" Margin="0,0,8,6"/>
+                        <Button x:Name="BtnStep3CloseAg" Content="Закрыть Antigravity" Style="{StaticResource AgSecBtn}" Visibility="Collapsed" Margin="0,0,8,6"/>
+                        <Button x:Name="BtnStep3LaunchAg" Content="Запустить Antigravity" Style="{StaticResource AgPrimaryBtn}" Visibility="Collapsed" Margin="0,0,8,6"/>
+                        <Button x:Name="BtnStep3Status" Content="Проверить статус" Style="{StaticResource AgSecBtn}" Margin="0,0,8,6"/>
+                        <Button x:Name="BtnStep3Restore" Content="Откатить (.agybak)" Style="{StaticResource AgSecBtn}" Margin="0,0,0,6"/>
+                    </WrapPanel>
 
-                    <TextBlock x:Name="TxtStep3Hint" Grid.Row="2" Text="" FontSize="12" Foreground="#9CA3AF" Margin="0,0,0,6" TextWrapping="Wrap"/>
+                    <Grid Grid.Row="2" Margin="0,2,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <CheckBox x:Name="ChkAgAutoPatch" Grid.Column="0" Content="Авто-патч после обновлений" Style="{StaticResource AgDarkCheckBox}" VerticalAlignment="Center" ToolTip="Фоновая проверка после обновлений IDE и автоматическое применение патча, когда Antigravity закрыт"/>
+                        <Button x:Name="BtnStep3Shortcut" Grid.Column="1" Content="Ярлык с авто-патчем" Style="{StaticResource AgSecBtn}" Padding="11,6" FontSize="12" ToolTip="Создать на Рабочем столе ярлык «Antigravity (Котек)», который перед запуском IDE проверяет и при необходимости применяет патч"/>
+                    </Grid>
 
-                    <Border Grid.Row="3" Background="#14161B" BorderBrush="#262A33" BorderThickness="1" CornerRadius="8" Padding="10,8">
+                    <TextBlock x:Name="TxtStep3Hint" Grid.Row="3" Text="" FontSize="12" Foreground="#9CA3AF" Margin="0,0,0,6" TextWrapping="Wrap"/>
+
+                    <Border Grid.Row="4" Background="#14161B" BorderBrush="#262A33" BorderThickness="1" CornerRadius="8" Padding="10,8">
                         <TextBox x:Name="TxtAgLog" IsReadOnly="True" Background="Transparent" BorderThickness="0" Foreground="#CBD5E1" FontFamily="Consolas" FontSize="11.5" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AcceptsReturn="True" Text="Нажми «Применить патч» или «Проверить статус»."/>
                     </Border>
                 </Grid>
@@ -304,10 +399,15 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
     $BtnStep2OpenDir  = $dlg.FindName('BtnStep2OpenDir')
     $TxtStep2Msg      = $dlg.FindName('TxtStep2Msg')
 
+    $BdStep3DnsNote   = $dlg.FindName('BdStep3DnsNote')
     $TxtStep3ProcWarn = $dlg.FindName('TxtStep3ProcWarn')
     $BtnStep3Patch    = $dlg.FindName('BtnStep3Patch')
+    $BtnStep3CloseAg  = $dlg.FindName('BtnStep3CloseAg')
+    $BtnStep3LaunchAg = $dlg.FindName('BtnStep3LaunchAg')
     $BtnStep3Status   = $dlg.FindName('BtnStep3Status')
     $BtnStep3Restore  = $dlg.FindName('BtnStep3Restore')
+    $ChkAgAutoPatch   = $dlg.FindName('ChkAgAutoPatch')
+    $BtnStep3Shortcut = $dlg.FindName('BtnStep3Shortcut')
     $TxtStep3Hint     = $dlg.FindName('TxtStep3Hint')
     $TxtAgLog         = $dlg.FindName('TxtAgLog')
 
@@ -315,8 +415,13 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
     $BtnWizCancel = $dlg.FindName('BtnWizCancel')
     $BtnWizNext   = $dlg.FindName('BtnWizNext')
     $fgBrush = $bc.ConvertFromString($accentFg)
-    foreach ($pb in @($BtnStep1Enable, $BtnStep2Download, $BtnStep3Patch, $BtnWizNext)) {
+    foreach ($pb in @($BtnStep1Enable, $BtnStep2Download, $BtnStep3Patch, $BtnStep3LaunchAg, $BtnWizNext)) {
         if ($null -ne $pb) { $pb.Foreground = $fgBrush }
+    }
+
+    $agAutoPatchFlag = Join-Path $Root 'utils\ag_autopatch.enabled'
+    if ($null -ne $ChkAgAutoPatch) {
+        $ChkAgAutoPatch.IsChecked = (Test-Path -LiteralPath $agAutoPatchFlag -PathType Leaf)
     }
 
     $state = [PSCustomObject]@{
@@ -325,6 +430,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
         AiOk       = $false
         ModulePath = ''
         PatchedOk  = $false
+        AgRunning  = $false
         Busy       = $false
         JobProc    = $null
         JobOutFile = ''
@@ -377,13 +483,22 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                 $running.Add($p.ProcessName)
             }
         }
-        if ($running.Count -gt 0) {
-            $TxtStep3ProcWarn.Text = "⚠ Сначала закрой процессы: $(($running | Select-Object -Unique) -join ', ') (обновится само)."
+        $state.AgRunning = ($running.Count -gt 0)
+        if ($state.AgRunning) {
+            $TxtStep3ProcWarn.Text = "⚠ Запущены процессы: $(($running | Select-Object -Unique) -join ', ') — закрой их или нажми «Закрыть и пропатчить»."
             $TxtStep3ProcWarn.Foreground = $bc.ConvertFromString('#D9B066')
+            $BtnStep3Patch.Content = 'Закрыть и пропатчить'
+            $BtnStep3CloseAg.Visibility = 'Visible'
         } else {
             $TxtStep3ProcWarn.Text = '✓ Процессы Antigravity закрыты — можно безопасно применять патч.'
             $TxtStep3ProcWarn.Foreground = $bc.ConvertFromString($accent)
+            $BtnStep3Patch.Content = 'Применить патч'
+            $BtnStep3CloseAg.Visibility = 'Collapsed'
         }
+        if ($null -ne $BdStep3DnsNote) {
+            $BdStep3DnsNote.Visibility = if ($state.AiOk) { 'Collapsed' } else { 'Visible' }
+        }
+        $BtnStep3LaunchAg.Visibility = if ($state.PatchedOk) { 'Visible' } else { 'Collapsed' }
     }
 
     $renderStep = {
@@ -428,11 +543,14 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
     $setBusyUi = {
         param([bool]$IsBusy)
         $state.Busy = $IsBusy
-        $BtnStep1Enable.IsEnabled  = (-not $IsBusy)
-        $BtnStep3Patch.IsEnabled   = (-not $IsBusy)
-        $BtnStep3Status.IsEnabled  = (-not $IsBusy)
-        $BtnStep3Restore.IsEnabled = (-not $IsBusy)
-        $BtnWizBack.IsEnabled      = (-not $IsBusy)
+        $BtnStep1Enable.IsEnabled   = (-not $IsBusy)
+        $BtnStep3Patch.IsEnabled    = (-not $IsBusy)
+        $BtnStep3CloseAg.IsEnabled  = (-not $IsBusy)
+        $BtnStep3LaunchAg.IsEnabled = (-not $IsBusy)
+        $BtnStep3Status.IsEnabled   = (-not $IsBusy)
+        $BtnStep3Restore.IsEnabled  = (-not $IsBusy)
+        $BtnStep3Shortcut.IsEnabled = (-not $IsBusy)
+        $BtnWizBack.IsEnabled       = (-not $IsBusy)
         if ($IsBusy) { $BtnWizNext.IsEnabled = $false }
     }
 
@@ -463,17 +581,29 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                     & $renderStep
                 } elseif ($kind -eq 'step3') {
                     $TxtAgLog.Text = if ($outTxt) { $outTxt } else { '(пустой вывод)' }
-                    if ($act -eq 'patch' -and $outTxt -match '\[OK\]') {
+                    if ($act -like 'patch*' -and $outTxt -match '\[OK\]') {
                         $state.PatchedOk = $true
-                        $TxtStep3Hint.Text = 'Патч успешно применён! Нажми «Завершить →».'
+                        $TxtStep3Hint.Text = 'Патч успешно применён! Можно запустить Antigravity или нажать «Завершить →».'
                         $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
-                    } elseif ($act -eq 'restore' -and $outTxt -match '\[OK\]') {
+                    } elseif ($act -like 'close*') {
+                        if ($outTxt -match '\[OK\]') {
+                            $TxtStep3Hint.Text = 'Процессы Antigravity закрыты.'
+                            $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+                        } else {
+                            $TxtStep3Hint.Text = 'Проверь статус процессов в логе ниже.'
+                            $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D9B066')
+                        }
+                    } elseif ($act -like 'restore*' -and $outTxt -match '\[OK\]') {
+                        $state.PatchedOk = $false
                         $TxtStep3Hint.Text = 'Оригинальные файлы восстановлены из бэкапов *.agybak.'
                         $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
                     } elseif ($outTxt -match '\[X\]') {
                         $TxtStep3Hint.Text = 'Операция остановлена — смотри лог ниже.'
                         $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D97777')
                     } else {
+                        if ($act -like 'status*' -and $outTxt -match 'уже пропатчен' -and $outTxt -notmatch 'готов к патчу') {
+                            $state.PatchedOk = $true
+                        }
                         $TxtStep3Hint.Text = 'Проверка завершена.'
                         $TxtStep3Hint.Foreground = $bc.ConvertFromString('#9CA3AF')
                     }
@@ -603,9 +733,109 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
         }
     }
 
-    $BtnStep3Patch.Add_Click({   & $runStep3 'patch'   })
+    $BtnStep3Patch.Add_Click({
+        if ($state.Busy) { return }
+        & $refreshChecks
+        if ($state.AgRunning) {
+            $cMsg = "Google Antigravity сейчас запущен.`r`nСохрани открытые файлы в IDE перед закрытием.`r`n`r`nЗакрыть процессы Antigravity и применить патч?"
+            $confirmed = $false
+            if (Get-Command Show-Z2MessageDialog -ErrorAction SilentlyContinue) {
+                $ans = Show-Z2MessageDialog -Owner $dlg -Title 'Закрыть и пропатчить Antigravity' -Message $cMsg -Kind 'Warning' -Buttons 'YesNo' -AccentHex $accent
+                $confirmed = ($ans -eq 'Yes')
+            } else {
+                $ans = [System.Windows.MessageBox]::Show($dlg, $cMsg, 'Закрыть и пропатчить Antigravity', [System.Windows.MessageBoxButton]::YesNo, [System.Windows.MessageBoxImage]::Warning)
+                $confirmed = ($ans -eq [System.Windows.MessageBoxResult]::Yes)
+            }
+            if (-not $confirmed) { return }
+            & $runStep3 'patch -ForceClose'
+        } else {
+            & $runStep3 'patch'
+        }
+    })
+    $BtnStep3CloseAg.Add_Click({ & $runStep3 'close -Offline' })
+    $BtnStep3LaunchAg.Add_Click({
+        $agExe = Find-Z2AntigravityExe
+        if ($agExe -and (Test-Path -LiteralPath $agExe -PathType Leaf)) {
+            try {
+                Start-Process -FilePath $agExe
+                $TxtStep3Hint.Text = "Запущен: $agExe"
+                $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+            } catch {
+                $TxtStep3Hint.Text = "Не удалось запустить Antigravity: $($_.Exception.Message)"
+                $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D97777')
+            }
+        } else {
+            $TxtStep3Hint.Text = 'Не найден исполняемый файл Antigravity.exe / Antigravity IDE.exe.'
+            $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D9B066')
+        }
+    })
     $BtnStep3Status.Add_Click({  & $runStep3 'status'  })
     $BtnStep3Restore.Add_Click({ & $runStep3 'restore' })
+
+    if ($null -ne $ChkAgAutoPatch) {
+        $ChkAgAutoPatch.Add_Click({
+            try {
+                if ([bool]$ChkAgAutoPatch.IsChecked) {
+                    [System.IO.File]::WriteAllText($agAutoPatchFlag, '', (New-Object System.Text.UTF8Encoding($false)))
+                    $TxtStep3Hint.Text = 'Авто-патч после обновлений включён.'
+                    $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+                } else {
+                    if (Test-Path -LiteralPath $agAutoPatchFlag -PathType Leaf) {
+                        Remove-Item -LiteralPath $agAutoPatchFlag -Force -ErrorAction SilentlyContinue
+                    }
+                    $TxtStep3Hint.Text = 'Авто-патч после обновлений выключен.'
+                    $TxtStep3Hint.Foreground = $bc.ConvertFromString('#9CA3AF')
+                }
+            } catch {}
+        })
+    }
+
+    if ($null -ne $BtnStep3Shortcut) {
+        $BtnStep3Shortcut.Add_Click({
+            & $refreshChecks
+            if (-not $state.ModulePath) {
+                $TxtStep3Hint.Text = 'Модуль antigravity_helper.ps1 не найден.'
+                $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D97777')
+                return
+            }
+            $agExe = Find-Z2AntigravityExe
+            if (-not $agExe) {
+                $TxtStep3Hint.Text = 'Не найден Antigravity.exe / Antigravity IDE.exe — установи IDE и повтори.'
+                $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D9B066')
+                return
+            }
+            try {
+                $modDir  = Join-Path $Root 'modules\antigravity'
+                if (-not (Test-Path -LiteralPath $modDir -PathType Container)) {
+                    New-Item -ItemType Directory -Path $modDir -Force | Out-Null
+                }
+                $vbsPath = Join-Path $modDir 'launch_patched.vbs'
+                $escMod  = $state.ModulePath.Replace("'", "''")
+                $escExe  = $agExe.Replace("'", "''")
+                $psBody  = "try { `$o = (& '$escMod' -Action status -Offline 2>&1 | Out-String); if (`$o -match 'готов к патчу') { & '$escMod' -Action patch -Offline | Out-Null } } catch {} finally { Start-Process -FilePath '$escExe' }"
+                $b64     = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($psBody))
+                $vbsCode = "Set sh = CreateObject(""WScript.Shell"")`r`nsh.Run ""powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -EncodedCommand $b64"", 0, False`r`n"
+                [System.IO.File]::WriteAllText($vbsPath, $vbsCode, (New-Object System.Text.UTF8Encoding($false)))
+
+                $deskDir = [Environment]::GetFolderPath('Desktop')
+                $lnkPath = Join-Path $deskDir 'Antigravity (Котек).lnk'
+                $wsh = New-Object -ComObject WScript.Shell
+                $sc  = $wsh.CreateShortcut($lnkPath)
+                $sc.TargetPath       = "$env:SystemRoot\System32\wscript.exe"
+                $sc.Arguments        = "`"$vbsPath`""
+                $sc.WorkingDirectory = (Split-Path -Parent $agExe)
+                $sc.IconLocation     = "$agExe,0"
+                $sc.Description      = 'Google Antigravity (авто-патч Zapret2 Kotek)'
+                $sc.Save()
+
+                $TxtStep3Hint.Text = 'Ярлык «Antigravity (Котек)» создан на Рабочем столе.'
+                $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+            } catch {
+                $TxtStep3Hint.Text = "Не удалось создать ярлык: $($_.Exception.Message)"
+                $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D97777')
+            }
+        })
+    }
 
     $BtnWizBack.Add_Click({
         if ($state.Step -gt 1) { $state.Step--; & $renderStep }
@@ -622,6 +852,10 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
 
     $BtnWizCancel.Add_Click({ $dlg.Close() })
 
+    & $refreshChecks
+    if (-not [string]::IsNullOrWhiteSpace($state.ModulePath)) {
+        $state.Step = 3
+    }
     & $renderStep
     $wizTimer.Start()
     [void]$dlg.ShowDialog()

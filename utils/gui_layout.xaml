@@ -863,6 +863,8 @@
                                             <Button x:Name="BtnAiAntigravityHelper" Grid.Column="1" Content="Пошаговая настройка →" Style="{StaticResource SecondaryBtn}" Padding="10,5" FontSize="12.5" Margin="10,0,0,0" VerticalAlignment="Center" ToolTip="Открыть пошаговый мастер настройки Google Antigravity"/>
                                         </Grid>
                                     </Border>
+                                    <Border Height="1" Background="#262A33" Margin="0,10,0,9"/>
+                                    <CheckBox x:Name="ChkAiVpnAutoPause" Content="Автопауза при full-tunnel VPN" Style="{StaticResource DarkCheckBox}" FontSize="13" Foreground="#CBD5E1" ToolTip="Ставить «Обход ИИ» на паузу только при включении full-tunnel VPN или системного прокси и возвращать после отключения (split-tunnel VPN не затрагивается)"/>
                                     <TextBlock x:Name="TxtAiPendingHint" Text="Набор сервисов изменён — нажми «Перезапустить», чтобы применить." Foreground="#D9B066" FontSize="12.5" Margin="0,10,0,0" Visibility="Collapsed" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Border>

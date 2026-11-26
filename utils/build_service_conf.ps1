@@ -450,6 +450,7 @@ if ($listsDir) {
 # 3b. Ensure Discord UDP profile has --out-range=-d4 and list-general TCP includes port 8443
 $needsTcp8443 = $false
 $needsTcpEmpty = $false
+$needsTcpIn = $false
 foreach ($p in $activeProfiles) {
     $isDiscordUdp = $false
     $hasOutRange = $false
@@ -464,8 +465,11 @@ foreach ($p in $activeProfiles) {
         if ($insertRangeIdx -lt 0 -and ($p[$j] -match '^(?i)--payload=' -or $p[$j] -match '^(?i)--lua-desync=')) {
             $insertRangeIdx = $j
         }
-        if ($p[$j] -match '^(?i)--payload=.*\bempty\b' -or $p[$j] -match '^(?i)--lua-desync=(syndata|wssize|oob)\b') {
+        if ($p[$j] -match '^(?i)--payload=.*\bempty\b' -or $p[$j] -match '^(?i)--lua-desync=(syndata|wssize|wsize|oob|synack_split|synack)\b') {
             $needsTcpEmpty = $true
+        }
+        if ($p[$j] -match '^(?i)--lua-desync=.*\b(ip_autottl|ip6_autottl|oob|wsize|wssize|synack_split)\b') {
+            $needsTcpIn = $true
         }
     }
     if ($isDiscordUdp -and -not $hasOutRange) {
@@ -509,8 +513,8 @@ if ($needsTcp8443) {
     }
 }
 
-# 4. Ensure --wf-tcp-in is present when Auto-Hostlist or circular orchestrator is active
-if ($autoHostOn -or $usesCircular) {
+# 4. Ensure --wf-tcp-in is present when Auto-Hostlist, circular orchestrator, or inbound-dependent desync (autottl/oob/wsize/synack_split) is active
+if ($autoHostOn -or $usesCircular -or $needsTcpIn) {
     $hasWfTcpIn = $false
     $wfTcpOutIdx = -1
     for ($i = 0; $i -lt $header.Count; $i++) {

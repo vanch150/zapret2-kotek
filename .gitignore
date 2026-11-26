@@ -19,6 +19,9 @@ utils/browser_policy.backup.json
 utils/tray_mode.enabled
 utils/tray_start_minimized.enabled
 utils/ai_bypass.conf
+utils/ai_paused_vpn.json
+utils/ai_vpn_autopause.enabled
+utils/ag_autopatch.enabled
 utils/autoupdate.mode
 utils/wf_priority.conf
 desktop.ini

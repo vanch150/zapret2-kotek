@@ -254,6 +254,7 @@ $ChkAi_perplexity   = $win.FindName('ChkAi_perplexity')
 $ChkAi_ide_ai       = $win.FindName('ChkAi_ide_ai')
 $ChkAi_antigravity  = $win.FindName('ChkAi_antigravity')
 $BtnAiSelAll        = $win.FindName('BtnAiSelAll')
+$ChkAiVpnAutoPause  = $win.FindName('ChkAiVpnAutoPause')
 $TxtAiPendingHint   = $win.FindName('TxtAiPendingHint')
 $BdAiClaudeWarn     = $win.FindName('BdAiClaudeWarn')
 $BdAiAntigravityHint= $win.FindName('BdAiAntigravityHint')
@@ -608,6 +609,12 @@ $script:AiPausedByVpn     = $false
 $script:AiPausedByVpnInfo = $null
 $script:AiVpnOverride     = $false
 $script:VpnWatchTick      = 0
+$script:LastFullVpnState  = $false
+$script:AgAutoPatchTimer  = $null
+$script:AgBgProc          = $null
+$script:AgBgOutFile       = ''
+$script:AgBgPhase         = ''
+$script:AgNeedPatchToasted = $false
 
 function Set-Z2BusyUiState([bool]$IsBusy) {
     $enabled = -not $IsBusy
@@ -617,7 +624,7 @@ function Set-Z2BusyUiState([bool]$IsBusy) {
         $CmbIpsetMode, $BtnDiag, $BtnUpdateLists, $BtnCheckUpdate, $BtnUninstall,
         $ChkAutoHost, $ChkWarp, $ChkGameFilter, $ChkKernelFilter, $ChkNlmVpn, $BtnNlmConfig,
         $BtnBrowserFix, $ChkBrowserQuic, $BtnEditGenUser, $BtnEditExUser,
-        $BtnAiToggle, $BtnAiProbe, $CmbAiMode, $BtnAiSelAll,
+        $BtnAiToggle, $BtnAiProbe, $CmbAiMode, $BtnAiSelAll, $ChkAiVpnAutoPause,
         $ChkAi_gemini, $ChkAi_chatgpt, $ChkAi_claude, $ChkAi_copilot, $ChkAi_grok, $ChkAi_perplexity, $ChkAi_ide_ai, $ChkAi_antigravity, $BtnPause
     )
     foreach ($ctrl in $mutControls) {
@@ -1371,28 +1378,48 @@ function Refresh-Dashboard {
                 $chk = $script:AiServiceCheckMap[$sid]
                 if ($null -ne $chk) { $chk.IsChecked = ($selSvcList -contains $sid) }
             }
+            if ($null -ne $ChkAiVpnAutoPause) {
+                $ChkAiVpnAutoPause.IsChecked = (Test-Path -LiteralPath (Join-Path $Root 'utils\ai_vpn_autopause.enabled') -PathType Leaf)
+            }
             if ($null -ne $TxtAiPendingHint) { $TxtAiPendingHint.Visibility = 'Collapsed' }
             Update-Z2AiSpecialHints
             $vpnNowAi = $null
             if (Get-Command Get-Z2ActiveVpnInfo -ErrorAction SilentlyContinue) {
                 try { $vpnNowAi = Get-Z2ActiveVpnInfo } catch {}
             }
+            $isFullVpnNow = ($null -ne $vpnNowAi -and [bool]$vpnNowAi.IsFullTunnel)
+            $script:LastFullVpnState = $isFullVpnNow
             $script:AiBypassActiveNow = [bool]$aiSt.Active
             if ($aiSt.Active) {
+                if (Get-Command Clear-Z2AiPausedVpnSnapshot -ErrorAction SilentlyContinue) {
+                    Clear-Z2AiPausedVpnSnapshot $Root
+                }
                 $warnDoh = if ($anyDohOn) { ' · [!] DoH браузера мешает' } else { '' }
-                $warnVpn = if ($null -ne $vpnNowAi -and $vpnNowAi.Active) { " · [!] VPN ($($vpnNowAi.Label)) — возможен двойной прокси" } else { '' }
+                $warnVpn = if ($isFullVpnNow) { " · [!] Full-tunnel VPN ($($vpnNowAi.Label)) — возможен двойной прокси" } else { '' }
                 $TxtAiStatusLine.Text = "Включён · $($aiSt.ActiveName) · $($aiSt.ServicesLabel) ($($aiSt.RuleCount) доменов)$warnDoh$warnVpn"
-                $TxtAiStatusLine.Foreground = if ($anyDohOn -or ($null -ne $vpnNowAi -and $vpnNowAi.Active)) { $bc.ConvertFromString('#D9B066') } else { $bc.ConvertFromString($AccentLightHex) }
-                if ($null -ne $BtnAiToggle) { $BtnAiToggle.Content = 'Выключить' }
-            } elseif ($script:AiPausedByVpn) {
-                $vpnLblP = if ($null -ne $vpnNowAi -and $vpnNowAi.Active) { $vpnNowAi.Label } else { 'VPN' }
-                $TxtAiStatusLine.Text = "На паузе (активен $vpnLblP) · вернётся сам после отключения VPN"
-                $TxtAiStatusLine.Foreground = $bc.ConvertFromString('#D9B066')
+                $TxtAiStatusLine.Foreground = if ($anyDohOn -or $isFullVpnNow) { $bc.ConvertFromString('#D9B066') } else { $bc.ConvertFromString($AccentLightHex) }
                 if ($null -ne $BtnAiToggle) { $BtnAiToggle.Content = 'Выключить' }
             } else {
-                $TxtAiStatusLine.Text = if ($aiSt.ServicesLabel -and $aiSt.ServicesLabel -ne 'не выбрано') { "Выключен · выбрано: $($aiSt.ServicesLabel)" } else { 'Выключен' }
-                $TxtAiStatusLine.Foreground = $bc.ConvertFromString('#9CA3AF')
-                if ($null -ne $BtnAiToggle) { $BtnAiToggle.Content = 'Включить' }
+                if (-not $script:AiPausedByVpn -and (Get-Command Get-Z2AiPausedVpnSnapshot -ErrorAction SilentlyContinue)) {
+                    $diskSnap = Get-Z2AiPausedVpnSnapshot $Root
+                    if ($null -ne $diskSnap) {
+                        $script:AiPausedByVpn = $true
+                        $script:AiPausedByVpnInfo = @{
+                            Domains = [string[]]@($diskSnap.Domains)
+                            Ips     = [string[]]@($diskSnap.Ips)
+                        }
+                    }
+                }
+                if ($script:AiPausedByVpn) {
+                    $vpnLblP = if ($isFullVpnNow) { $vpnNowAi.Label } else { 'VPN' }
+                    $TxtAiStatusLine.Text = "На паузе (активен $vpnLblP) · вернётся сам после отключения VPN"
+                    $TxtAiStatusLine.Foreground = $bc.ConvertFromString('#D9B066')
+                    if ($null -ne $BtnAiToggle) { $BtnAiToggle.Content = 'Выключить' }
+                } else {
+                    $TxtAiStatusLine.Text = if ($aiSt.ServicesLabel -and $aiSt.ServicesLabel -ne 'не выбрано') { "Выключен · выбрано: $($aiSt.ServicesLabel)" } else { 'Выключен' }
+                    $TxtAiStatusLine.Foreground = $bc.ConvertFromString('#9CA3AF')
+                    if ($null -ne $BtnAiToggle) { $BtnAiToggle.Content = 'Включить' }
+                }
             }
         }
     }
@@ -1595,6 +1622,7 @@ $script:CatTimer.Add_Tick({
             }
             $summaryLine = ''
             $errLine = ''
+            $allLogLines = @()
             if (Test-Path -LiteralPath $script:TaskLogPath) {
                 try {
                     $allLogLines = @(Get-Content -LiteralPath $script:TaskLogPath -Encoding UTF8 -ErrorAction SilentlyContinue | ForEach-Object { $_.Trim() })
@@ -1637,6 +1665,52 @@ $script:CatTimer.Add_Tick({
                     } catch {}
                 }
             } else {
+                if ($taskKind -eq 'selfupdate') {
+                    $updMarkerHit = ($allLogLines -and (@($allLogLines | Where-Object { $_ -match '^\[Z2_UPDATED\]' }).Count -gt 0))
+                    $diskVerNow = ''
+                    try { $diskVerNow = Get-Z2Version $Root } catch {}
+                    $verChanged = (-not [string]::IsNullOrWhiteSpace($diskVerNow)) -and ($diskVerNow -ne $Version)
+                    if ($updMarkerHit -or $verChanged) {
+                        $rstMsg = 'Обновление установлено — перезапускаю Котек...'
+                        Set-Status $rstMsg $AccentLightHex
+                        Show-Toast $rstMsg $false
+                        $rstTimer = New-Object System.Windows.Threading.DispatcherTimer
+                        $rstTimer.Interval = [TimeSpan]::FromMilliseconds(850)
+                        $rstTimer.Add_Tick({
+                            param($tmr, $evArgs)
+                            try { $tmr.Stop() } catch {}
+                            try { $script:CatTimer.Stop() } catch {}
+                            try { $script:WakeTimer.Stop() } catch {}
+                            $script:ForceExitGui = $true
+                            Dispose-Z2TrayIcon
+                            if ($null -ne $script:ShowWindowEvent) {
+                                try { $script:ShowWindowEvent.Dispose() } catch {}
+                                $script:ShowWindowEvent = $null
+                            }
+                            Exit-Z2GuiMutex
+                            $rootNoSlash = Format-Z2DirNoSlash $Root
+                            $guiScript = Join-Path $rootNoSlash 'utils\gui_app.ps1'
+                            $psExe = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+                            $b64Root = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($rootNoSlash))
+                            $b64Gui  = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($guiScript))
+                            $b64Ps   = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($psExe))
+                            $relaunchCmd = "Start-Sleep -Milliseconds 1000; `$r=[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64Root')); `$g=[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64Gui')); `$p=[System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64Ps')); `$env:Z2_ROOT=`$r; `$a='-STA -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""' + `$g + '"" -Root ""' + `$r + '""'; Start-Process -FilePath `$p -ArgumentList `$a -WorkingDirectory `$r"
+                            $b64Cmd = [System.Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($relaunchCmd))
+                            try {
+                                $psiRst = New-Object System.Diagnostics.ProcessStartInfo
+                                $psiRst.FileName = $psExe
+                                $psiRst.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $b64Cmd"
+                                $psiRst.WorkingDirectory = $rootNoSlash
+                                $psiRst.UseShellExecute = $false
+                                $psiRst.CreateNoWindow = $true
+                                [void][System.Diagnostics.Process]::Start($psiRst)
+                            } catch {}
+                            $win.Close()
+                        })
+                        $rstTimer.Start()
+                        return
+                    }
+                }
                 $okMsg = if ($taskKind -eq 'autosetup') { "Автонастройка завершена — стратегия $($script:ActiveStratName) активна!" } elseif ($summaryLine) { "$lbl — $summaryLine" } else { "$lbl — успешно завершено!" }
                 Set-Status $okMsg $AccentLightHex
                 Show-Toast $okMsg $false
@@ -1734,6 +1808,8 @@ function Run-ConsoleTool([string]$ScriptRel, [string]$ExtraArgs = '', [bool]$Kee
         $script:ActiveTaskKind = 'diag'
     } elseif ($ScriptRel -match 'probe_one') {
         $script:ActiveTaskKind = 'probe'
+    } elseif ($ScriptRel -match 'self_update') {
+        $script:ActiveTaskKind = 'selfupdate'
     } else {
         $script:ActiveTaskKind = 'other'
     }
@@ -2393,6 +2469,9 @@ function Sync-Z2AiSelectionUi {
             if ($null -ne $script:AiPausedByVpnInfo) {
                 $selNewP = Get-Z2AiSelectionInfo $Root $selStr
                 $script:AiPausedByVpnInfo.Domains = [string[]]@($selNewP.Domains)
+                if (Get-Command Save-Z2AiPausedVpnSnapshot -ErrorAction SilentlyContinue) {
+                    [void](Save-Z2AiPausedVpnSnapshot $Root $script:AiPausedByVpnInfo.Domains $script:AiPausedByVpnInfo.Ips)
+                }
             }
         } catch {}
         if ($null -ne $TxtAiPendingHint) { $TxtAiPendingHint.Visibility = 'Collapsed' }
@@ -2436,6 +2515,23 @@ if ($null -ne $BtnAiSelAll) {
     })
 }
 
+if ($null -ne $ChkAiVpnAutoPause) {
+    $ChkAiVpnAutoPause.Add_Click({
+        $flagP = Join-Path $Root 'utils\ai_vpn_autopause.enabled'
+        try {
+            if ([bool]$ChkAiVpnAutoPause.IsChecked) {
+                [System.IO.File]::WriteAllText($flagP, '', (New-Object System.Text.UTF8Encoding($false)))
+                Show-Toast 'Автопауза «Обхода ИИ» при full-tunnel VPN включена.' $false
+            } else {
+                if (Test-Path -LiteralPath $flagP -PathType Leaf) {
+                    Remove-Item -LiteralPath $flagP -Force -ErrorAction SilentlyContinue
+                }
+                Show-Toast 'Автопауза «Обхода ИИ» при VPN выключена — правила NRPT останутся активными.' $false
+            }
+        } catch {}
+    })
+}
+
 if ($null -ne $BtnAiToggle) {
     $BtnAiToggle.Add_Click({
         if ($null -ne $script:WatchedProc -and -not $script:WatchedProc.HasExited) { Set-Status 'Дождись завершения текущей задачи.' '#D9B066'; return }
@@ -2448,6 +2544,7 @@ if ($null -ne $BtnAiToggle) {
             $script:AiPausedByVpn     = $false
             $script:AiPausedByVpnInfo = $null
             $script:AiVpnOverride     = $false
+            if (Get-Command Clear-Z2AiPausedVpnSnapshot -ErrorAction SilentlyContinue) { Clear-Z2AiPausedVpnSnapshot $Root }
             Set-Status 'Отключение обхода ИИ...' '#D9B066'
             Invoke-Z2BgUiWork {
                 param($RootDir)
@@ -2478,9 +2575,9 @@ if ($null -ne $BtnAiToggle) {
             }
             if (Get-Command Get-Z2ActiveVpnInfo -ErrorAction SilentlyContinue) {
                 $vpnBeforeEn = Get-Z2ActiveVpnInfo
-                if ($vpnBeforeEn.Active) {
-                    $vpnMsg = "Сейчас активен VPN/прокси: $($vpnBeforeEn.Label).`r`nОдновременная работа «Обхода ИИ» (SmartDNS) и VPN создаёт двойной прокси и сильные тормоза (особенно в Gemini и ChatGPT).`r`n`r`nВсё равно включить «Обход ИИ» принудительно?"
-                    $vpnAns = Show-Z2MessageDialog -Owner $win -Title 'Конфликт: активен VPN' -Message $vpnMsg -Kind 'Warning' -Buttons 'YesNo' -AccentHex $AccentHex
+                if ($vpnBeforeEn.IsFullTunnel) {
+                    $vpnMsg = "Сейчас активен full-tunnel VPN/прокси: $($vpnBeforeEn.Label).`r`nОдновременная работа «Обхода ИИ» (SmartDNS) и full-tunnel VPN создаёт двойной прокси и сильные тормоза (особенно в Gemini и ChatGPT).`r`n`r`nВсё равно включить «Обход ИИ» принудительно?"
+                    $vpnAns = Show-Z2MessageDialog -Owner $win -Title 'Конфликт: активен full-tunnel VPN' -Message $vpnMsg -Kind 'Warning' -Buttons 'YesNo' -AccentHex $AccentHex
                     if ($vpnAns -ne 'Yes') { return }
                     $script:AiVpnOverride = $true
                 } else {
@@ -2489,6 +2586,7 @@ if ($null -ne $BtnAiToggle) {
             }
             $script:AiPausedByVpn     = $false
             $script:AiPausedByVpnInfo = $null
+            if (Get-Command Clear-Z2AiPausedVpnSnapshot -ErrorAction SilentlyContinue) { Clear-Z2AiPausedVpnSnapshot $Root }
             try {
                 $cfgNow = Get-Z2AiBypassConf $Root
                 $cfgNow.Services = $selStr
@@ -3123,6 +3221,68 @@ $win.Add_ContentRendered({
         }
     } catch {}
     Invoke-Z2TelemetrySoftRemind
+    if ($null -eq $script:AgAutoPatchTimer) {
+        $script:AgAutoPatchTimer = New-Object System.Windows.Threading.DispatcherTimer
+        $script:AgAutoPatchTimer.Interval = [TimeSpan]::FromSeconds(5)
+        $script:AgAutoPatchTimer.Add_Tick({
+            try {
+                if ($null -ne $script:AgBgProc) {
+                    if (-not $script:AgBgProc.HasExited) { return }
+                    $agOut = ''
+                    if ($script:AgBgOutFile -and (Test-Path -LiteralPath $script:AgBgOutFile -PathType Leaf)) {
+                        try { $agOut = ([System.IO.File]::ReadAllText($script:AgBgOutFile, [System.Text.Encoding]::UTF8)).Trim() } catch {}
+                        Remove-Item -LiteralPath $script:AgBgOutFile -Force -ErrorAction SilentlyContinue
+                    }
+                    $phase = $script:AgBgPhase
+                    try { $script:AgBgProc.Dispose() } catch {}
+                    $script:AgBgProc    = $null
+                    $script:AgBgOutFile = ''
+                    $script:AgBgPhase   = ''
+                    $script:AgAutoPatchTimer.Interval = [TimeSpan]::FromMinutes(10)
+
+                    if ($phase -eq 'status') {
+                        if ($agOut -match 'готов к патчу') {
+                            $agRunNow = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                                $_.ProcessName -like 'Antigravity*' -or $_.ProcessName -ieq 'agy' -or $_.ProcessName -like 'language_server*'
+                            })
+                            if ($agRunNow.Count -eq 0) {
+                                $modP = if (Get-Command Find-Z2AntigravityModuleScript -ErrorAction SilentlyContinue) { Find-Z2AntigravityModuleScript $Root } else { '' }
+                                if ($modP -and (Get-Command Start-Z2AgAsyncCmd -ErrorAction SilentlyContinue)) {
+                                    $jPatch = Start-Z2AgAsyncCmd $modP 'patch'
+                                    $script:AgBgProc    = $jPatch.Proc
+                                    $script:AgBgOutFile = $jPatch.OutFile
+                                    $script:AgBgPhase   = 'patch'
+                                    $script:AgAutoPatchTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+                                }
+                            } elseif (-not $script:AgNeedPatchToasted) {
+                                $script:AgNeedPatchToasted = $true
+                                Show-Toast 'Antigravity обновился — патч слетел. Закрой IDE, чтобы применить патч автоматически.' $true
+                            }
+                        }
+                    } elseif ($phase -eq 'patch') {
+                        if ($agOut -match '\[OK\]') {
+                            $script:AgNeedPatchToasted = $false
+                            Show-Toast 'Antigravity обновился — патч применён автоматически' $false
+                        }
+                    }
+                    return
+                }
+
+                $script:AgAutoPatchTimer.Interval = [TimeSpan]::FromMinutes(10)
+                if (-not (Test-Path -LiteralPath (Join-Path $Root 'utils\ag_autopatch.enabled') -PathType Leaf)) { return }
+                $modScript = if (Get-Command Find-Z2AntigravityModuleScript -ErrorAction SilentlyContinue) { Find-Z2AntigravityModuleScript $Root } else { '' }
+                if (-not $modScript -or -not (Get-Command Start-Z2AgAsyncCmd -ErrorAction SilentlyContinue)) { return }
+                $jStat = Start-Z2AgAsyncCmd $modScript 'status -Offline'
+                $script:AgBgProc    = $jStat.Proc
+                $script:AgBgOutFile = $jStat.OutFile
+                $script:AgBgPhase   = 'status'
+                $script:AgAutoPatchTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+            } catch {
+                $script:AgAutoPatchTimer.Interval = [TimeSpan]::FromMinutes(10)
+            }
+        })
+        $script:AgAutoPatchTimer.Start()
+    }
 })
 
 # Lightweight wake timer: restores window from tray when second GUI instance signals EventWaitHandle
@@ -3145,37 +3305,53 @@ $script:WakeTimer.Add_Tick({
     if (($script:VpnWatchTick % 10) -eq 0 -and -not $script:BgOpBusy -and ($null -eq $script:WatchedProc -or $script:WatchedProc.HasExited)) {
         if (Get-Command Get-Z2ActiveVpnInfo -ErrorAction SilentlyContinue) {
             try {
-                if ($script:AiBypassActiveNow -and -not $script:AiPausedByVpn -and -not $script:AiVpnOverride) {
+                $autoPauseOn = (Test-Path -LiteralPath (Join-Path $Root 'utils\ai_vpn_autopause.enabled') -PathType Leaf)
+                if ($script:AiPausedByVpn) {
                     $vpnTick = Get-Z2ActiveVpnInfo
-                    if ($vpnTick.Active) {
-                        $aiSnap = Get-Z2AiBypassState $Root
-                        if ($aiSnap.Active -and $aiSnap.Domains.Count -gt 0 -and $aiSnap.IpsList.Count -gt 0) {
-                            $script:AiPausedByVpnInfo = @{
-                                Domains = [string[]]@($aiSnap.Domains)
-                                Ips     = [string[]]@($aiSnap.IpsList)
-                            }
-                            [void](Disable-Z2AiBypass $Root)
-                            $script:AiPausedByVpn = $true
-                            Refresh-Dashboard
-                            Show-Toast "Обход ИИ поставлен на паузу (активен VPN: $($vpnTick.Label)) — вернётся сам после отключения VPN." $false
-                        }
-                    }
-                } elseif ($script:AiPausedByVpn) {
-                    $vpnTick = Get-Z2ActiveVpnInfo
-                    if (-not $vpnTick.Active) {
+                    if (-not $vpnTick.IsFullTunnel) {
                         $restoredOk = $true
                         if ($null -ne $script:AiPausedByVpnInfo -and $script:AiPausedByVpnInfo.Domains.Count -gt 0 -and $script:AiPausedByVpnInfo.Ips.Count -gt 0) {
                             $restoredOk = [bool](Restore-Z2AiBypassFast $Root $script:AiPausedByVpnInfo.Domains $script:AiPausedByVpnInfo.Ips)
                         }
                         $script:AiPausedByVpn     = $false
                         $script:AiPausedByVpnInfo = $null
+                        if (Get-Command Clear-Z2AiPausedVpnSnapshot -ErrorAction SilentlyContinue) { Clear-Z2AiPausedVpnSnapshot $Root }
                         Refresh-Dashboard
-                        if ($restoredOk) { Show-Toast 'VPN отключён — «Обход ИИ» автоматически восстановлен.' $false }
+                        if ($restoredOk) { Show-Toast 'Full-tunnel VPN отключён — «Обход ИИ» автоматически восстановлен.' $false }
                         else { Show-Toast 'VPN отключён, но не удалось восстановить «Обход ИИ» — включи его вручную.' $true }
+                    }
+                } elseif ($script:AiBypassActiveNow) {
+                    $vpnTick = Get-Z2ActiveVpnInfo
+                    $isFullNow = [bool]$vpnTick.IsFullTunnel
+                    if ($autoPauseOn -and -not $script:AiVpnOverride) {
+                        if ($isFullNow) {
+                            $aiSnap = Get-Z2AiBypassState $Root
+                            if ($aiSnap.Active -and $aiSnap.Domains.Count -gt 0 -and $aiSnap.IpsList.Count -gt 0) {
+                                $script:AiPausedByVpnInfo = @{
+                                    Domains = [string[]]@($aiSnap.Domains)
+                                    Ips     = [string[]]@($aiSnap.IpsList)
+                                }
+                                if (Get-Command Save-Z2AiPausedVpnSnapshot -ErrorAction SilentlyContinue) {
+                                    [void](Save-Z2AiPausedVpnSnapshot $Root $script:AiPausedByVpnInfo.Domains $script:AiPausedByVpnInfo.Ips)
+                                }
+                                [void](Disable-Z2AiBypass $Root)
+                                $script:AiPausedByVpn = $true
+                                Refresh-Dashboard
+                                Show-Toast "Обход ИИ поставлен на паузу (активен full-tunnel VPN: $($vpnTick.Label)) — вернётся сам после отключения VPN." $false
+                            }
+                        }
+                    } else {
+                        if ($isFullNow -ne $script:LastFullVpnState) {
+                            $script:LastFullVpnState = $isFullNow
+                            Refresh-Dashboard
+                        }
+                        if ($script:AiVpnOverride -and -not $isFullNow) {
+                            $script:AiVpnOverride = $false
+                        }
                     }
                 } elseif ($script:AiVpnOverride) {
                     $vpnTick = Get-Z2ActiveVpnInfo
-                    if (-not $vpnTick.Active) { $script:AiVpnOverride = $false }
+                    if (-not $vpnTick.IsFullTunnel) { $script:AiVpnOverride = $false }
                 }
             } catch {}
         }
@@ -3282,6 +3458,17 @@ if ($startHidden) {
 }
 [void]$script:WpfApp.Run()
 $script:WakeTimer.Stop()
+if ($null -ne $script:AgAutoPatchTimer) {
+    try { $script:AgAutoPatchTimer.Stop() } catch {}
+}
+if ($null -ne $script:AgBgProc) {
+    try { if (-not $script:AgBgProc.HasExited) { $script:AgBgProc.Kill() } } catch {}
+    try { $script:AgBgProc.Dispose() } catch {}
+    $script:AgBgProc = $null
+}
+if ($script:AgBgOutFile -and (Test-Path -LiteralPath $script:AgBgOutFile -PathType Leaf)) {
+    Remove-Item -LiteralPath $script:AgBgOutFile -Force -ErrorAction SilentlyContinue
+}
 $script:CatTimer.Stop()
 Dispose-Z2TrayIcon
 if ($null -ne $script:ShowWindowEvent) {

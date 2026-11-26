@@ -350,7 +350,7 @@ try {
                 $newK = $k + $tag
                 $mergedBlobs[$newK] = $def -replace ("^--blob=" + [regex]::Escape($k) + ":"), ("--blob=" + $newK + ":")
                 for ($pi = 0; $pi -lt $parsed.Profiles.Count; $pi++) {
-                    $parsed.Profiles[$pi] = $parsed.Profiles[$pi] -replace ("(blob=|seqovl_pattern=)" + [regex]::Escape($k) + "(?=[:\s]|$)"), ("`$1" + $newK)
+                    $parsed.Profiles[$pi] = $parsed.Profiles[$pi] -replace ("(blob=|seqovl_pattern=|pattern=|fallback=)" + [regex]::Escape($k) + "(?=[:\s]|$)"), ("`$1" + $newK)
                 }
             }
         }
@@ -433,7 +433,7 @@ try {
     $batLines.Add('if not exist "%GAME_FAKE%" set "GAME_FAKE=%BIN%quic_initial_www_google_com.bin"')
     $batLines.Add('cd /d "%BIN%"')
     $batLines.Add('')
-    $needTcpEmpty = ($chosenProfiles -join ' ') -match '(?i)(--payload=empty|syndata|wssize|oob)'
+    $needTcpEmpty = ($chosenProfiles -join ' ') -match '(?i)(--payload=empty|syndata|wssize|wsize|oob|synack_split|synack)'
     $tcpEmptyFlag = if ($needTcpEmpty) { '--wf-tcp-empty=1 ' } else { '' }
     $batLines.Add(('start "zapret2: %~n0" /min "%BIN%winws2.exe" ' + $tcpEmptyFlag + '--wf-tcp-in=80,443,2053,2083,2087,2096,8443 --wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,500,1701,2408,4500,19294-19344,50000-50100,%GameFilterUDP% ^'))
     $batLines.Add(($mergedLuas -join ' ') + ' ^')

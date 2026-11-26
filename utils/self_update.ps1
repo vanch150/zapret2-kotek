@@ -714,6 +714,7 @@ Write-Host "     (=^.^=) ZAPRET2 KOTEK ОБНОВЛЁН ДО v$latestTag!       
 Write-Host '  ==================================================================' -ForegroundColor Green
 Write-Host '  Все личные списки, стратегия и настройки Telegram Proxy сохранены.'
 try { [IO.File]::AppendAllText((Join-Path $Root 'utils\autoupdate.log'), "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') Updated to v$latestTag`r`n") } catch {}
+if (-not $Silent) { Write-Host "  [Z2_UPDATED] v$latestTag" -ForegroundColor Green }
 Write-Host '  Перезапусти окно Zapret2 Kotek, чтобы применить новый интерфейс.'
 Write-Host ''
 exit 0

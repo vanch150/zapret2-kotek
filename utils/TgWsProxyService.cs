@@ -633,6 +633,7 @@ namespace ZapretTgWsProxy
                         if (needReconnect)
                         {
                             try { ssl.Dispose(); } catch { }
+                            sslRef = null;
                             try { tcp.Close(); } catch { }
                             tcp = CreateTcpClientForTarget(targetHost, out parsedIp);
                             tcp.NoDelay = true;
@@ -740,6 +741,7 @@ namespace ZapretTgWsProxy
                 if (!string.Equals(acceptHeader, expectedAccept, StringComparison.Ordinal))
                     throw new IOException("Invalid Sec-WebSocket-Accept from " + targetHost + ":" + port);
 
+                ct.ThrowIfCancellationRequested();
                 return new RawWebSocket(tcp, netStream, routeLabel);
             }
             catch
@@ -1599,6 +1601,8 @@ namespace ZapretTgWsProxy
             }
             _activeFallbackTcp.Clear();
 
+            DrainAllPools();
+
             List<Task> bgTasks = new List<Task>();
             Task acceptTask = _acceptTask;
             Task warmupTask = _warmupTask;
@@ -1660,33 +1664,51 @@ namespace ZapretTgWsProxy
 
         private void EnqueueDirectSafe(ConcurrentQueue<RawWebSocket> q, RawWebSocket ws)
         {
-            if (!_running || PoolSize <= 0)
+            if (ws == null)
+                return;
+            int cap = PoolSize;
+            if (!_running || cap <= 0 || ws.IsClosed || ws.IsStale(95.0) || q.Count >= cap)
             {
-                ws.Dispose();
+                try { ws.Dispose(); } catch { }
                 return;
             }
             q.Enqueue(ws);
+            while (q.Count > cap)
+            {
+                RawWebSocket excess;
+                if (!q.TryDequeue(out excess)) break;
+                try { excess.Dispose(); } catch { }
+            }
             if (!_running || PoolSize <= 0)
             {
                 RawWebSocket stale;
                 while (q.TryDequeue(out stale))
-                    stale.Dispose();
+                    try { stale.Dispose(); } catch { }
             }
         }
 
         private void EnqueueCfSafe(ConcurrentQueue<RawWebSocket> q, RawWebSocket ws)
         {
-            if (!_running || PoolSize <= 0)
+            if (ws == null)
+                return;
+            int cap = PoolSize;
+            if (!_running || cap <= 0 || ws.IsClosed || ws.IsStale(85.0) || q.Count >= cap)
             {
-                ws.Dispose();
+                try { ws.Dispose(); } catch { }
                 return;
             }
             q.Enqueue(ws);
+            while (q.Count > cap)
+            {
+                RawWebSocket excess;
+                if (!q.TryDequeue(out excess)) break;
+                try { excess.Dispose(); } catch { }
+            }
             if (!_running || PoolSize <= 0)
             {
                 RawWebSocket stale;
                 while (q.TryDequeue(out stale))
-                    stale.Dispose();
+                    try { stale.Dispose(); } catch { }
             }
         }
 
@@ -1849,63 +1871,82 @@ namespace ZapretTgWsProxy
 
                 Interlocked.Exchange(ref _lastDirectProbeUtcMs, nowMs);
 
-                List<Task<RawWebSocket>> tasks = new List<Task<RawWebSocket>>();
-                List<string> taskIps = new List<string>();
-                for (int i = 0; i < DirectWsCandidateIps.Length; i++)
+                CancellationTokenSource raceCts;
+                try
                 {
-                    string ip = DirectWsCandidateIps[i];
-                    taskIps.Add(ip);
-                    tasks.Add(RawWebSocket.ConnectAsync(
-                        ip, 443, "kws4.web.telegram.org", "/apiws", "kws4.web.telegram.org", true, BufferSize, 2200, "direct:" + ip, ct));
+                    raceCts = ct.CanBeCanceled
+                        ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                        : new CancellationTokenSource();
+                }
+                catch (ObjectDisposedException)
+                {
+                    return false;
                 }
 
-                List<Task<RawWebSocket>> pending = new List<Task<RawWebSocket>>(tasks);
-                while (pending.Count > 0)
+                List<Task<RawWebSocket>> tasks = new List<Task<RawWebSocket>>();
+                List<string> taskIps = new List<string>();
+                List<Task<RawWebSocket>> pending = new List<Task<RawWebSocket>>();
+                try
                 {
-                    if (ct.IsCancellationRequested)
+                    CancellationToken raceToken = raceCts.Token;
+                    for (int i = 0; i < DirectWsCandidateIps.Length; i++)
                     {
-                        CleanupRemainingTasks(pending);
-                        return false;
+                        string ip = DirectWsCandidateIps[i];
+                        taskIps.Add(ip);
+                        Task<RawWebSocket> t = RawWebSocket.ConnectAsync(
+                            ip, 443, "kws4.web.telegram.org", "/apiws", "kws4.web.telegram.org", true, BufferSize, 2200, "direct:" + ip, raceToken);
+                        tasks.Add(t);
+                        pending.Add(t);
                     }
-                    Task<RawWebSocket> finished = await Task.WhenAny(pending).ConfigureAwait(false);
-                    pending.Remove(finished);
-                    if (finished.Status == TaskStatus.RanToCompletion && finished.Result != null)
+
+                    while (pending.Count > 0)
                     {
-                        RawWebSocket winner = finished.Result;
                         if (ct.IsCancellationRequested)
-                        {
-                            winner.Dispose();
-                            CleanupRemainingTasks(pending);
                             return false;
-                        }
-                        int idx = tasks.IndexOf(finished);
-                        string winIp = idx >= 0 ? taskIps[idx] : "149.154.167.220";
-                        _workingDirectIp = winIp;
-                        if (!_userDcRedirects.Contains(2)) DcRedirects[2] = winIp;
-                        if (!_userDcRedirects.Contains(4)) DcRedirects[4] = winIp;
-                        Interlocked.Exchange(ref _directFailStreak, 0);
-                        long okNowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
-                        Interlocked.CompareExchange(ref _directStableSinceUtcMs, okNowMs, 0);
-                        Interlocked.Exchange(ref _directWsState, 1);
-                        Log("INFO", "Direct Telegram WS reachable via " + winIp);
-
-                        if (PoolSize > 0 && _running)
+                        Task<RawWebSocket> finished = await Task.WhenAny(pending).ConfigureAwait(false);
+                        pending.Remove(finished);
+                        if (finished.Status == TaskStatus.RanToCompletion && finished.Result != null)
                         {
-                            ConcurrentQueue<RawWebSocket> q4 = _wsPool.GetOrAdd("4", delegate { return new ConcurrentQueue<RawWebSocket>(); });
-                            EnqueueDirectSafe(q4, winner);
-                        }
-                        else
-                        {
-                            winner.Dispose();
-                        }
+                            RawWebSocket winner = finished.Result;
+                            if (ct.IsCancellationRequested)
+                            {
+                                winner.Dispose();
+                                return false;
+                            }
+                            int idx = tasks.IndexOf(finished);
+                            string winIp = idx >= 0 ? taskIps[idx] : "149.154.167.220";
+                            _workingDirectIp = winIp;
+                            if (!_userDcRedirects.Contains(2)) DcRedirects[2] = winIp;
+                            if (!_userDcRedirects.Contains(4)) DcRedirects[4] = winIp;
+                            Interlocked.Exchange(ref _directFailStreak, 0);
+                            long okNowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
+                            Interlocked.CompareExchange(ref _directStableSinceUtcMs, okNowMs, 0);
+                            Interlocked.Exchange(ref _directWsState, 1);
+                            Log("INFO", "Direct Telegram WS reachable via " + winIp);
 
-                        CleanupRemainingTasks(pending);
-                        return true;
+                            if (PoolSize > 0 && _running)
+                            {
+                                ConcurrentQueue<RawWebSocket> q4 = _wsPool.GetOrAdd("4", delegate { return new ConcurrentQueue<RawWebSocket>(); });
+                                EnqueueDirectSafe(q4, winner);
+                            }
+                            else
+                            {
+                                winner.Dispose();
+                            }
+
+                            return true;
+                        }
+                        else if (finished.IsFaulted && finished.Exception != null)
+                        {
+                            GC.KeepAlive(finished.Exception);
+                        }
                     }
-                    else if (finished.IsFaulted && finished.Exception != null)
-                    {
-                        GC.KeepAlive(finished.Exception);
-                    }
+                }
+                finally
+                {
+                    try { raceCts.Cancel(); } catch { }
+                    CleanupRemainingTasks(pending);
+                    DisposeRaceCtsWhenDone(raceCts, tasks);
                 }
 
                 if (ct.IsCancellationRequested)
@@ -1921,11 +1962,42 @@ namespace ZapretTgWsProxy
             }
         }
 
+        private static void DisposeRaceCtsWhenDone(CancellationTokenSource raceCts, List<Task<RawWebSocket>> tasks)
+        {
+            if (raceCts == null)
+                return;
+            if (tasks == null || tasks.Count == 0)
+            {
+                try { raceCts.Dispose(); } catch { }
+                return;
+            }
+            Task.WhenAll(tasks).ContinueWith(delegate(Task all)
+            {
+                if (all.IsFaulted && all.Exception != null)
+                    GC.KeepAlive(all.Exception);
+                try { raceCts.Dispose(); } catch { }
+            }, TaskContinuationOptions.ExecuteSynchronously);
+        }
+
         private static void CleanupRemainingTasks(List<Task<RawWebSocket>> pending)
         {
+            if (pending == null || pending.Count == 0)
+                return;
             for (int i = 0; i < pending.Count; i++)
             {
                 Task<RawWebSocket> t = pending[i];
+                if (t.IsCompleted)
+                {
+                    if (t.IsFaulted)
+                    {
+                        if (t.Exception != null) GC.KeepAlive(t.Exception);
+                    }
+                    else if (t.Status == TaskStatus.RanToCompletion && t.Result != null)
+                    {
+                        try { t.Result.Dispose(); } catch { }
+                    }
+                    continue;
+                }
                 t.ContinueWith(delegate(Task<RawWebSocket> done)
                 {
                     if (done.IsFaulted)
@@ -1937,8 +2009,9 @@ namespace ZapretTgWsProxy
                     {
                         try { done.Result.Dispose(); } catch { }
                     }
-                });
+                }, TaskContinuationOptions.ExecuteSynchronously);
             }
+            pending.Clear();
         }
 
         private void ScheduleDirectRefill(int dc, bool isMedia, CancellationToken ct)
@@ -1954,8 +2027,9 @@ namespace ZapretTgWsProxy
                 try
                 {
                     ConcurrentQueue<RawWebSocket> q = _wsPool.GetOrAdd(key, delegate { return new ConcurrentQueue<RawWebSocket>(); });
-                    int needed = Math.Max(0, Math.Min(PoolSize, 3) - q.Count);
-                    for (int i = 0; i < needed && _running && !ct.IsCancellationRequested && Volatile.Read(ref _directWsState) == 1; i++)
+                    int target = Math.Min(PoolSize, 3);
+                    int needed = Math.Max(0, target - q.Count);
+                    for (int i = 0; i < needed && q.Count < target && _running && !ct.IsCancellationRequested && Volatile.Read(ref _directWsState) == 1; i++)
                     {
                         string targetIp;
                         if (!DcRedirects.TryGetValue(dc, out targetIp) || string.IsNullOrEmpty(targetIp))
@@ -1989,7 +2063,7 @@ namespace ZapretTgWsProxy
                     ConcurrentQueue<RawWebSocket> q = _cfPool.GetOrAdd(dc, delegate { return new ConcurrentQueue<RawWebSocket>(); });
                     int target = (dc == 2 || dc == 4) ? Math.Min(PoolSize, 3) : 1;
                     int needed = target - q.Count;
-                    for (int i = 0; i < needed && _running && !ct.IsCancellationRequested; i++)
+                    for (int i = 0; i < needed && q.Count < target && _running && !ct.IsCancellationRequested; i++)
                     {
                         RawWebSocket ws = await ConnectCfFastAsync(dc, ct).ConfigureAwait(false);
                         if (ws != null) EnqueueCfSafe(q, ws);
@@ -2027,6 +2101,11 @@ namespace ZapretTgWsProxy
                     RawWebSocket ws;
                     while (q.TryDequeue(out ws))
                     {
+                        if (!_running || ct.IsCancellationRequested)
+                        {
+                            ws.Dispose();
+                            return null;
+                        }
                         if (ws.IsStale(95.0))
                         {
                             ws.Dispose();
@@ -2059,6 +2138,11 @@ namespace ZapretTgWsProxy
                     RawWebSocket ws;
                     while (q.TryDequeue(out ws))
                     {
+                        if (!_running || ct.IsCancellationRequested)
+                        {
+                            ws.Dispose();
+                            return null;
+                        }
                         if (ws.IsStale(85.0))
                         {
                             ws.Dispose();
@@ -2138,25 +2222,57 @@ namespace ZapretTgWsProxy
                 for (int i = 0; i < CfWorkerDomains.Count && !ct.IsCancellationRequested; i++)
                 {
                     string wDom = CfWorkerDomains[i];
+                    int cfPort = DisableSecure ? 80 : 443;
+                    bool useSecure = !DisableSecure;
+                    string primaryLabel = (useSecure ? "cf-worker:" : "cf-worker-ws80:") + wDom;
+                    Exception lastErr = null;
                     try
                     {
-                        int cfPort = DisableSecure ? 80 : 443;
                         RawWebSocket ws = await RawWebSocket.ConnectAsync(
-                            CleanCfAnycastIps[0], cfPort, wDom, path, wDom, !DisableSecure, BufferSize, 3200, "cf-worker:" + wDom, ct).ConfigureAwait(false);
+                            CleanCfAnycastIps[0], cfPort, wDom, path, wDom, useSecure, BufferSize, 3200, primaryLabel, ct).ConfigureAwait(false);
                         return ws;
                     }
                     catch (OperationCanceledException) { return null; }
-                    catch { }
+                    catch (Exception ex) { lastErr = ex; }
                     if (ct.IsCancellationRequested) return null;
                     try
                     {
-                        int port = DisableSecure ? 80 : 443;
                         RawWebSocket ws = await RawWebSocket.ConnectAsync(
-                            wDom, port, wDom, path, wDom, !DisableSecure, BufferSize, 3200, "cf-worker:" + wDom, ct).ConfigureAwait(false);
+                            wDom, cfPort, wDom, path, wDom, useSecure, BufferSize, 3200, primaryLabel, ct).ConfigureAwait(false);
                         return ws;
                     }
                     catch (OperationCanceledException) { return null; }
-                    catch { }
+                    catch (Exception ex) { lastErr = ex; }
+
+                    // Auto-fallback to ws://:80 when :443 fails (e.g., TLS handshake timeout)
+                    if (!DisableSecure && !ct.IsCancellationRequested)
+                    {
+                        Log("DEBUG", string.Format("CF worker {0}:443 failed ({1}), falling back to ws://:80", wDom, lastErr != null ? lastErr.Message : "unknown"));
+                        string fallbackLabel = "cf-worker-ws80:" + wDom;
+                        try
+                        {
+                            RawWebSocket ws = await RawWebSocket.ConnectAsync(
+                                CleanCfAnycastIps[0], 80, wDom, path, wDom, false, BufferSize, 3200, fallbackLabel, ct).ConfigureAwait(false);
+                            return ws;
+                        }
+                        catch (OperationCanceledException) { return null; }
+                        catch (Exception ex)
+                        {
+                            Log("DEBUG", string.Format("CF worker {0}:80 via Clean-IP failed: {1}", wDom, ex.Message));
+                        }
+                        if (ct.IsCancellationRequested) return null;
+                        try
+                        {
+                            RawWebSocket ws = await RawWebSocket.ConnectAsync(
+                                wDom, 80, wDom, path, wDom, false, BufferSize, 3200, fallbackLabel, ct).ConfigureAwait(false);
+                            return ws;
+                        }
+                        catch (OperationCanceledException) { return null; }
+                        catch (Exception ex)
+                        {
+                            Log("DEBUG", string.Format("CF worker {0}:80 direct failed: {1}", wDom, ex.Message));
+                        }
+                    }
                 }
             }
 
@@ -2268,48 +2384,65 @@ namespace ZapretTgWsProxy
             if (specs == null || specs.Count == 0 || ct.IsCancellationRequested)
                 return null;
 
-            List<Task<RawWebSocket>> tasks = new List<Task<RawWebSocket>>(specs.Count);
-            List<Task<RawWebSocket>> pending = new List<Task<RawWebSocket>>(specs.Count);
-            for (int i = 0; i < specs.Count; i++)
+            CancellationTokenSource raceCts;
+            try
             {
-                Task<RawWebSocket> t = ConnectViaSpecAsync(normDc, specs[i], timeoutMs, ct);
-                tasks.Add(t);
-                pending.Add(t);
+                raceCts = ct.CanBeCanceled
+                    ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                    : new CancellationTokenSource();
+            }
+            catch (ObjectDisposedException)
+            {
+                return null;
             }
 
-            while (pending.Count > 0)
+            List<Task<RawWebSocket>> tasks = new List<Task<RawWebSocket>>(specs.Count);
+            List<Task<RawWebSocket>> pending = new List<Task<RawWebSocket>>(specs.Count);
+            try
             {
-                if (ct.IsCancellationRequested)
+                CancellationToken raceToken = raceCts.Token;
+                for (int i = 0; i < specs.Count; i++)
                 {
-                    CleanupRemainingTasks(pending);
-                    return null;
+                    Task<RawWebSocket> t = ConnectViaSpecAsync(normDc, specs[i], timeoutMs, raceToken);
+                    tasks.Add(t);
+                    pending.Add(t);
                 }
-                Task<RawWebSocket> done = await Task.WhenAny(pending).ConfigureAwait(false);
-                pending.Remove(done);
-                if (done.Status == TaskStatus.RanToCompletion && done.Result != null)
+
+                while (pending.Count > 0)
                 {
-                    RawWebSocket winner = done.Result;
                     if (ct.IsCancellationRequested)
-                    {
-                        winner.Dispose();
-                        CleanupRemainingTasks(pending);
                         return null;
-                    }
-                    int winIdx = tasks.IndexOf(done);
-                    if (winIdx >= 0)
+                    Task<RawWebSocket> done = await Task.WhenAny(pending).ConfigureAwait(false);
+                    pending.Remove(done);
+                    if (done.Status == TaskStatus.RanToCompletion && done.Result != null)
                     {
-                        Volatile.Write(ref _bestCfRoute, specs[winIdx]);
-                        Log("INFO", "Selected optimal Cloudflare route: " + winner.RouteLabel);
+                        RawWebSocket winner = done.Result;
+                        if (ct.IsCancellationRequested)
+                        {
+                            winner.Dispose();
+                            return null;
+                        }
+                        int winIdx = tasks.IndexOf(done);
+                        if (winIdx >= 0)
+                        {
+                            Volatile.Write(ref _bestCfRoute, specs[winIdx]);
+                            Log("INFO", "Selected optimal Cloudflare route: " + winner.RouteLabel);
+                        }
+                        return winner;
                     }
-                    CleanupRemainingTasks(pending);
-                    return winner;
+                    else if (done.IsFaulted && done.Exception != null)
+                    {
+                        GC.KeepAlive(done.Exception);
+                    }
                 }
-                else if (done.IsFaulted && done.Exception != null)
-                {
-                    GC.KeepAlive(done.Exception);
-                }
+                return null;
             }
-            return null;
+            finally
+            {
+                try { raceCts.Cancel(); } catch { }
+                CleanupRemainingTasks(pending);
+                DisposeRaceCtsWhenDone(raceCts, tasks);
+            }
         }
 
         private async Task<RawWebSocket> RaceCfRoutesAsync(int normDc, int timeoutMs, CancellationToken ct)
@@ -2351,11 +2484,28 @@ namespace ZapretTgWsProxy
                     await _connSlots.WaitAsync(ct).ConfigureAwait(false);
                     acquired = true;
                     TcpClient client = await _listener.AcceptTcpClientAsync().ConfigureAwait(false);
-                    acquired = false; // ownership transferred to HandleClientAsync
+                    if (!_running || ct.IsCancellationRequested)
+                    {
+                        try { client.Close(); } catch { }
+                        acquired = false;
+                        try { _connSlots.Release(); } catch { }
+                        break;
+                    }
                     TcpClient captured = client;
                     _activeClients.TryAdd(captured, 0);
-                    Task clientTask = Task.Run(delegate { return HandleClientAsync(captured, ct); });
-                    TrackTask(clientTask);
+                    try
+                    {
+                        Task clientTask = Task.Run(delegate { return HandleClientAsync(captured, ct); });
+                        acquired = false; // ownership transferred to HandleClientAsync
+                        TrackTask(clientTask);
+                    }
+                    catch
+                    {
+                        byte dummyClient;
+                        _activeClients.TryRemove(captured, out dummyClient);
+                        try { captured.Close(); } catch { }
+                        throw;
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -2804,6 +2954,8 @@ namespace ZapretTgWsProxy
             }
             finally
             {
+                try { ws.CloseTransport(); } catch { }
+                try { cltStream.Close(); } catch { }
                 try { ctr.Dispose(); } catch { }
                 byte removedWs;
                 _activeWs.TryRemove(ws, out removedWs);

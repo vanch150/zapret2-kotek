@@ -288,8 +288,8 @@ function Save-Z2AiBypassConf([string]$RootPath, $Cfg) {
 }
 
 $script:Z2AiNrptRegPath = 'HKLM:\SYSTEM\CurrentControlSet\Services\Dnscache\Parameters\DnsPolicyConfig'
-$script:Z2AiVpnRx = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|\b(TAP|TUN)\b|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Radmin|Hamachi|ZeroTier|Tailscale|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
-$script:Z2AiVpnExcludeRx = 'ExitLag|Hyper-V|vEthernet|VMware|VirtualBox|Bluetooth|Loopback|Pseudo'
+$script:Z2AiVpnRx = 'WARP|Cloudflare|WireGuard|Amnezia|OpenVPN|\b(TAP|TUN)\b|Wintun|Sing-box|Hiddify|Nekoray|v2ray|Outline|Proton|Nord|Mullvad|Cisco|Fortinet|VPN'
+$script:Z2AiVpnExcludeRx = 'ExitLag|Hyper-V|vEthernet|VMware|VirtualBox|Bluetooth|Loopback|Pseudo|Radmin|Hamachi|ZeroTier|Tailscale'
 
 function Invoke-Z2FlushDnsFast {
     try {
@@ -350,16 +350,31 @@ function Get-Z2AiNrptRegistryRules {
 function Get-Z2ActiveVpnInfo {
     $names = New-Object System.Collections.Generic.List[string]
     $seen  = New-Object System.Collections.Generic.HashSet[string]([System.StringComparer]::OrdinalIgnoreCase)
+    $upIfIdx  = New-Object System.Collections.Generic.HashSet[int]
+    $vpnIfIdx = New-Object System.Collections.Generic.HashSet[int]
+    $hasSysProxy = $false
     try {
         foreach ($ni in [System.Net.NetworkInformation.NetworkInterface]::GetAllNetworkInterfaces()) {
             if ($ni.OperationalStatus -ne [System.Net.NetworkInformation.OperationalStatus]::Up) { continue }
             if ($ni.NetworkInterfaceType -eq [System.Net.NetworkInformation.NetworkInterfaceType]::Loopback) { continue }
+            $ifIdx = -1
+            try {
+                $ipProps = $ni.GetIPProperties()
+                if ($null -ne $ipProps) {
+                    $v4Props = $ipProps.GetIPv4Properties()
+                    if ($null -ne $v4Props) {
+                        $ifIdx = [int]$v4Props.Index
+                        if ($ifIdx -ge 0) { [void]$upIfIdx.Add($ifIdx) }
+                    }
+                }
+            } catch {}
             $nName = [string]$ni.Name
             $nDesc = [string]$ni.Description
             if ($nName -match $script:Z2AiVpnExcludeRx -or $nDesc -match $script:Z2AiVpnExcludeRx) { continue }
             $isVpn = ($nName -match $script:Z2AiVpnRx) -or
                      ($nDesc -match $script:Z2AiVpnRx)
             if ($isVpn) {
+                if ($ifIdx -ge 0) { [void]$vpnIfIdx.Add($ifIdx) }
                 $disp = if ($nName) { $nName } else { $nDesc }
                 if ($disp -and $seen.Add($disp)) { $names.Add($disp) }
             }
@@ -370,15 +385,107 @@ function Get-Z2ActiveVpnInfo {
         if ($null -ne $inet -and [int]$inet.ProxyEnable -eq 1 -and -not [string]::IsNullOrWhiteSpace([string]$inet.ProxyServer)) {
             $psrv = ([string]$inet.ProxyServer).Trim()
             if ($psrv -notmatch '^(?:socks=)?127\.0\.0\.1:1443$') {
+                $hasSysProxy = $true
                 $lbl = "Системный прокси ($psrv)"
                 if ($seen.Add($lbl)) { $names.Add($lbl) }
             }
         }
     } catch {}
+
+    $isFullTunnel = $hasSysProxy
+    if (-not $isFullTunnel -and $vpnIfIdx.Count -gt 0) {
+        try {
+            $routes = @(Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
+                $_.DestinationPrefix -eq '0.0.0.0/0' -or
+                $_.DestinationPrefix -eq '0.0.0.0/1' -or
+                $_.DestinationPrefix -eq '128.0.0.0/1'
+            })
+            $hasHalf0   = $false
+            $hasHalf128 = $false
+            $bestDefMetric = [int]::MaxValue
+            $defRoutes = New-Object System.Collections.Generic.List[object]
+
+            foreach ($r in $routes) {
+                $rIdx = [int]$r.InterfaceIndex
+                if ($r.DestinationPrefix -eq '0.0.0.0/1') {
+                    if ($vpnIfIdx.Contains($rIdx)) { $hasHalf0 = $true }
+                } elseif ($r.DestinationPrefix -eq '128.0.0.0/1') {
+                    if ($vpnIfIdx.Contains($rIdx)) { $hasHalf128 = $true }
+                } elseif ($r.DestinationPrefix -eq '0.0.0.0/0') {
+                    if ($upIfIdx.Count -eq 0 -or $upIfIdx.Contains($rIdx)) {
+                        $totMetric = [int]$r.RouteMetric + [int]$r.InterfaceMetric
+                        if ($totMetric -lt $bestDefMetric) { $bestDefMetric = $totMetric }
+                        $defRoutes.Add([PSCustomObject]@{ IfIdx = $rIdx; Metric = $totMetric })
+                    }
+                }
+            }
+
+            if ($hasHalf0 -and $hasHalf128) {
+                $isFullTunnel = $true
+            } elseif ($defRoutes.Count -gt 0) {
+                foreach ($dr in $defRoutes) {
+                    if ($dr.Metric -eq $bestDefMetric -and $vpnIfIdx.Contains($dr.IfIdx)) {
+                        $isFullTunnel = $true
+                        break
+                    }
+                }
+            }
+        } catch {}
+    }
+
     return [PSCustomObject]@{
-        Active = ($names.Count -gt 0)
-        Names  = [string[]]$names.ToArray()
-        Label  = ($names -join ', ')
+        Active       = ($names.Count -gt 0)
+        IsFullTunnel = [bool]$isFullTunnel
+        Names        = [string[]]$names.ToArray()
+        Label        = ($names -join ', ')
+    }
+}
+
+function Get-Z2AiPausedVpnPath([string]$RootPath = '') {
+    if (-not $RootPath) { $RootPath = $Root }
+    return (Join-Path $RootPath 'utils\ai_paused_vpn.json')
+}
+
+function Save-Z2AiPausedVpnSnapshot([string]$RootPath = '', [string[]]$Domains = @(), [string[]]$Ips = @()) {
+    if (-not $RootPath) { $RootPath = $Root }
+    $p = Get-Z2AiPausedVpnPath $RootPath
+    try {
+        $obj = [PSCustomObject]@{
+            Domains = [string[]]@($Domains)
+            Ips     = [string[]]@($Ips)
+        }
+        $json = ($obj | ConvertTo-Json -Depth 3) -replace "`r?`n", "`r`n"
+        [System.IO.File]::WriteAllText($p, $json + "`r`n", (New-Object System.Text.UTF8Encoding($false)))
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Get-Z2AiPausedVpnSnapshot([string]$RootPath = '') {
+    if (-not $RootPath) { $RootPath = $Root }
+    $p = Get-Z2AiPausedVpnPath $RootPath
+    if (-not (Test-Path -LiteralPath $p -PathType Leaf)) { return $null }
+    try {
+        $raw = Get-Content -LiteralPath $p -Raw -Encoding UTF8 -ErrorAction Stop
+        $obj = $raw | ConvertFrom-Json -ErrorAction Stop
+        $doms = @($obj.Domains | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+        $ips  = @($obj.Ips | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | ForEach-Object { [string]$_ })
+        if ($doms.Count -gt 0 -and $ips.Count -gt 0) {
+            return [PSCustomObject]@{
+                Domains = [string[]]$doms
+                Ips     = [string[]]$ips
+            }
+        }
+    } catch {}
+    return $null
+}
+
+function Clear-Z2AiPausedVpnSnapshot([string]$RootPath = '') {
+    if (-not $RootPath) { $RootPath = $Root }
+    $p = Get-Z2AiPausedVpnPath $RootPath
+    if (Test-Path -LiteralPath $p -PathType Leaf) {
+        Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -767,8 +874,8 @@ function Enable-Z2AiBypass(
         return $false
     }
     $vpnCheck = Get-Z2ActiveVpnInfo
-    if ($vpnCheck.Active) {
-        Write-Host ("  [!] Обнаружен активный VPN/прокси ({0}): при одновременной работе со SmartDNS возможен двойной прокси и тормоза." -f $vpnCheck.Label) -ForegroundColor DarkYellow
+    if ($vpnCheck.IsFullTunnel) {
+        Write-Host ("  [!] Обнаружен full-tunnel VPN/прокси ({0}): при одновременной работе со SmartDNS возможен двойной прокси и тормоза." -f $vpnCheck.Label) -ForegroundColor DarkYellow
     }
 
     $probePlan = Get-Z2AiProbePlan $sel

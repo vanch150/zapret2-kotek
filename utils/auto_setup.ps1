@@ -258,14 +258,18 @@ Write-Host "`n  [3/5] (=^.^=) Котек тестирует стратегии �
 Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTimeoutMs 3000
 
 $Candidates = @(
-    @{ File = 'general (ALT).bat';            Bonus = 0 },
-    @{ File = 'general (ALT7).bat';           Bonus = 0 },
-    @{ File = 'custom_wssize_antifreeze.bat'; Bonus = 0 },
-    @{ File = 'general (ALT11).bat';  Bonus = 0 },
-    @{ File = 'custom_md5_disorder.bat';      Bonus = 0 },
-    @{ File = 'general (ALT12).bat';       Bonus = 0 },
-    @{ File = 'general (FAKE TLS AUTO).bat';  Bonus = 0 },
-    @{ File = 'custom_auto_circular.bat';     Bonus = 0 }
+    @{ File = 'general (ALT).bat';               Bonus = 0 },
+    @{ File = 'general (ALT7).bat';              Bonus = 0 },
+    @{ File = 'custom_tls_clone_autottl.bat';    Bonus = 0 },
+    @{ File = 'custom_udplen_multidisorder.bat'; Bonus = 0 },
+    @{ File = 'custom_wssize_antifreeze.bat';    Bonus = 0 },
+    @{ File = 'custom_md5_disorder.bat';         Bonus = 0 },
+    @{ File = 'general (ALT12).bat';             Bonus = 0 },
+    @{ File = 'general (FAKE TLS AUTO).bat';     Bonus = 0 },
+    @{ File = 'custom_badsum_hostfake.bat';      Bonus = 0 },
+    @{ File = 'custom_clean_disorder.bat';       Bonus = 0 },
+    @{ File = 'custom_fakeddisorder_pad.bat';    Bonus = 0 },
+    @{ File = 'custom_auto_circular.bat';        Bonus = 0 }
 )
 
 # Auto-discover any custom *.bat strategies in strategies\ (and fallback root)

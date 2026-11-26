@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 > nul
-:: Clean MultiDisorder (без фейков на TCP — только multidisorder + seqovl)
+:: Clean MultiDisorder (без фейков и блобов на TCP — эталонный чистый multidisorder)
 
 set "ROOT=%~dp0"
 if exist "%~dp0..\utils\service.bat" set "ROOT=%~dp0..\"
@@ -27,14 +27,14 @@ cd /d "%BIN%"
 
 start "zapret2: %~n0" /min "%BIN%winws2.exe" --wf-tcp-out=80,443,2053,2083,2087,2096,8443,%GameFilterTCP% --wf-udp-out=443,500,1701,2408,4500,19294-19344,50000-50100,%GameFilterUDP% ^
 --lua-init=@"%LUA%zapret-lib.lua" --lua-init=@"%LUA%zapret-antidpi.lua" ^
---blob=quic_google:@"%BIN%quic_initial_www_google_com.bin" --blob=wg_init:@"%BIN%wireguard_initiation.bin" --blob=discord_udp:@"%DISCORD_FAKE%" --blob=tls_google:@"%BIN%tls_clienthello_www_google_com.bin" --blob=tls_max:@"%BIN%tls_clienthello_max_ru.bin" --blob=game_udp:@"%GAME_FAKE%" ^
+--blob=quic_google:@"%BIN%quic_initial_www_google_com.bin" --blob=wg_init:@"%BIN%wireguard_initiation.bin" --blob=discord_udp:@"%DISCORD_FAKE%" --blob=game_udp:@"%GAME_FAKE%" ^
 --filter-udp=443 --filter-l7=quic --hostlist="%LISTS%list-general.txt" --hostlist="%LISTS%list-general-user.txt" --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d10 --payload=quic_initial --lua-desync=fake:blob=quic_google:repeats=6 --new ^
 --filter-udp=500,1701,2408,4500 --filter-l7=wireguard,stun,unknown --out-range=-d4 --payload=wireguard_initiation,wireguard_keepalive,stun,unknown --lua-desync=fake:blob=wg_init:payload=all:repeats=6 --new ^
 --filter-udp=19294-19344,50000-50100 --filter-l7=discord,stun --out-range=-d4 --payload=discord_ip_discovery,stun --lua-desync=fake:blob=discord_udp:repeats=6 --new ^
---filter-tcp=2053,2083,2087,2096,8443 --filter-l7=tls --hostlist-domains=discord.media --out-range=-d10 --payload=tls_client_hello --lua-desync=multidisorder:pos=1,midsld:seqovl=681:seqovl_pattern=tls_google --new ^
---filter-tcp=443 --filter-l7=tls --hostlist="%LISTS%list-google.txt" --out-range=-d10 --payload=tls_client_hello --lua-desync=multidisorder:pos=1,midsld:seqovl=681:seqovl_pattern=tls_google:ip_id=zero --new ^
---filter-tcp=80,443 --filter-l7=http,tls --hostlist="%LISTS%list-general.txt" --hostlist="%LISTS%list-general-user.txt" --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d10 --payload=tls_client_hello,http_req --lua-desync=multidisorder:pos=1,midsld:seqovl=664:seqovl_pattern=tls_max --new ^
+--filter-tcp=2053,2083,2087,2096,8443 --filter-l7=tls --hostlist-domains=discord.media --out-range=-d10 --payload=tls_client_hello --lua-desync=multidisorder:pos=1,midsld --new ^
+--filter-tcp=443 --filter-l7=tls --hostlist="%LISTS%list-google.txt" --out-range=-d10 --payload=tls_client_hello --lua-desync=multidisorder:pos=1,midsld:ip_id=zero --new ^
+--filter-tcp=80,443 --filter-l7=http,tls --hostlist="%LISTS%list-general.txt" --hostlist="%LISTS%list-general-user.txt" --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d10 --payload=tls_client_hello --lua-desync=multidisorder:pos=1,midsld --payload=http_req --lua-desync=multidisorder:pos=2,midsld --new ^
 --filter-udp=443 --filter-l7=quic --ipset="%LISTS%ipset-all.txt" --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d10 --payload=quic_initial --lua-desync=fake:blob=quic_google:repeats=6 --new ^
---filter-tcp=80,443,8443 --filter-l7=http,tls --ipset="%LISTS%ipset-all.txt" --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d10 --payload=tls_client_hello,http_req --lua-desync=multidisorder:pos=1,midsld:seqovl=664:seqovl_pattern=tls_max --new ^
---filter-tcp=%GameFilterTCP% --ipset="%LISTS%ipset-all.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d4 --payload=known,unknown --lua-desync=multidisorder:pos=1:seqovl=664:seqovl_pattern=tls_max:payload=all --new ^
+--filter-tcp=80,443,8443 --filter-l7=http,tls --ipset="%LISTS%ipset-all.txt" --hostlist-exclude="%LISTS%list-exclude.txt" --hostlist-exclude="%LISTS%list-exclude-user.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d10 --payload=tls_client_hello --lua-desync=multidisorder:pos=1,midsld --payload=http_req --lua-desync=multidisorder:pos=2,midsld --new ^
+--filter-tcp=%GameFilterTCP% --ipset="%LISTS%ipset-all.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d4 --payload=known,unknown --lua-desync=multidisorder:pos=2,midsld:payload=all --new ^
 --filter-udp=%GameFilterUDP% --ipset="%LISTS%ipset-all.txt" --ipset-exclude="%LISTS%ipset-exclude.txt" --ipset-exclude="%LISTS%ipset-exclude-user.txt" --out-range=-d3 --payload=known,unknown --lua-desync=fake:blob=game_udp:payload=all:repeats=8
