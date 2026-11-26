@@ -925,6 +925,18 @@
                                 </Grid>
                                 <ComboBox x:Name="CmbUdpFake" Grid.Row="2" Style="{StaticResource DarkCombo}" Margin="0,8,0,0" Visibility="Collapsed"/>
                             </Grid>
+                            <Border Style="{StaticResource RowDivider}"/>
+                            <Grid Margin="16,13">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                    <TextBlock Text="Google Antigravity (патчер РФ-аккаунта)" FontSize="15.5" FontWeight="Medium" Foreground="#F1F3F5" VerticalAlignment="Center"/>
+                                    <TextBlock Text="Снятие локальной проверки региона и авто-патч после обновлений (работает и со своим VPN, без SmartDNS)" FontSize="13.5" Foreground="#9CA3AF" Margin="0,3,12,0" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <Button x:Name="BtnToolAntigravity" Grid.Column="1" Content="Открыть" Style="{StaticResource SecondaryBtn}" MinWidth="106" VerticalAlignment="Center" ToolTip="Открыть мастер настройки и патчер Google Antigravity"/>
+                            </Grid>
 
                         </StackPanel>
                     </Border>

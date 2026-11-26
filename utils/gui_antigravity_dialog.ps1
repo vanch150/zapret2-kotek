@@ -104,12 +104,14 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
     }
     $accent = if ($AccentHex -match '^#[0-9A-Fa-f]{6}$') { $AccentHex } else { '#7BC4A4' }
     $accentFg = '#121316'
+    $accentText = $accent
     try {
         $ar = [Convert]::ToInt32($accent.Substring(1, 2), 16)
         $ag = [Convert]::ToInt32($accent.Substring(3, 2), 16)
         $ab = [Convert]::ToInt32($accent.Substring(5, 2), 16)
         $lum = (0.299 * $ar) + (0.587 * $ag) + (0.114 * $ab)
         if ($lum -lt 145) { $accentFg = '#FFFFFF' }
+        if ($lum -lt 130) { $accentText = '#7BC4A4' }
     } catch {}
     $releaseUrl = 'https://github.com/vanch150/kotek-antigravity-helper/releases/latest'
 
@@ -248,6 +250,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
 
                     <StackPanel Orientation="Horizontal">
                         <Button x:Name="BtnStep1Enable" Content="Включить сетевой обход" Style="{StaticResource AgPrimaryBtn}" Margin="0,0,10,0"/>
+                        <Button x:Name="BtnStep1SkipVpn" Content="У меня уже свой VPN →" Style="{StaticResource AgSecBtn}"/>
                     </StackPanel>
                     <TextBlock x:Name="TxtStep1Err" Text="" FontSize="12" Foreground="#D97777" Margin="0,10,0,0" TextWrapping="Wrap"/>
                 </StackPanel>
@@ -316,7 +319,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
 
                 <!-- PAGE 4: Done -->
                 <StackPanel x:Name="PageStep4" Visibility="Collapsed" VerticalAlignment="Center">
-                    <TextBlock Text="✓ Настройка завершена!" FontSize="18" FontWeight="SemiBold" Foreground="__ACCENT__"/>
+                    <TextBlock x:Name="TxtStep4Title" Text="✓ Настройка завершена!" FontSize="18" FontWeight="SemiBold" Foreground="#7BC4A4"/>
                     <TextBlock Text="Сеть Antigravity идёт через SmartDNS, а локальная проверка региона снята (оригиналы сохранены в *.agybak)." FontSize="13" Foreground="#E5E7EB" Margin="0,8,0,14" TextWrapping="Wrap"/>
                     <Border Background="#14161B" BorderBrush="#262A33" BorderThickness="1" CornerRadius="8" Padding="14,12">
                         <StackPanel>
@@ -390,6 +393,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
     $TxtStep1Status   = $dlg.FindName('TxtStep1Status')
     $TxtStep1Sub      = $dlg.FindName('TxtStep1Sub')
     $BtnStep1Enable   = $dlg.FindName('BtnStep1Enable')
+    $BtnStep1SkipVpn  = $dlg.FindName('BtnStep1SkipVpn')
     $TxtStep1Err      = $dlg.FindName('TxtStep1Err')
 
     $TxtStep2Status   = $dlg.FindName('TxtStep2Status')
@@ -410,6 +414,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
     $BtnStep3Shortcut = $dlg.FindName('BtnStep3Shortcut')
     $TxtStep3Hint     = $dlg.FindName('TxtStep3Hint')
     $TxtAgLog         = $dlg.FindName('TxtAgLog')
+    $TxtStep4Title    = $dlg.FindName('TxtStep4Title')
 
     $BtnWizBack   = $dlg.FindName('BtnWizBack')
     $BtnWizCancel = $dlg.FindName('BtnWizCancel')
@@ -418,6 +423,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
     foreach ($pb in @($BtnStep1Enable, $BtnStep2Download, $BtnStep3Patch, $BtnStep3LaunchAg, $BtnWizNext)) {
         if ($null -ne $pb) { $pb.Foreground = $fgBrush }
     }
+    if ($null -ne $TxtStep4Title) { $TxtStep4Title.Foreground = $bc.ConvertFromString($accentText) }
 
     $agAutoPatchFlag = Join-Path $Root 'utils\ag_autopatch.enabled'
     if ($null -ne $ChkAgAutoPatch) {
@@ -451,7 +457,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                 if ($null -ne $aiSt -and $aiSt.Active -and (@($aiSt.Services) -contains 'antigravity')) {
                     $state.AiOk = $true
                     $TxtStep1Status.Text = "✓ Сетевой обход активен ($($aiSt.ActiveName))"
-                    $TxtStep1Status.Foreground = $bc.ConvertFromString($accent)
+                    $TxtStep1Status.Foreground = $bc.ConvertFromString($accentText)
                     $TxtStep1Sub.Text = 'Домены Google Antigravity уже идут через SmartDNS. Можно переходить к Шагу 2.'
                     $BtnStep1Enable.Content = 'Перезапустить обход'
                 } else {
@@ -468,7 +474,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
         $state.ModulePath = $modPath
         if ($modPath) {
             $TxtStep2Status.Text = '✓ Модуль найден и готов к работе'
-            $TxtStep2Status.Foreground = $bc.ConvertFromString($accent)
+            $TxtStep2Status.Foreground = $bc.ConvertFromString($accentText)
             $TxtStep2Path.Text = $modPath
         } else {
             $TxtStep2Status.Text = 'Модуль пока не установлен'
@@ -491,7 +497,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
             $BtnStep3CloseAg.Visibility = 'Visible'
         } else {
             $TxtStep3ProcWarn.Text = '✓ Процессы Antigravity закрыты — можно безопасно применять патч.'
-            $TxtStep3ProcWarn.Foreground = $bc.ConvertFromString($accent)
+            $TxtStep3ProcWarn.Foreground = $bc.ConvertFromString($accentText)
             $BtnStep3Patch.Content = 'Применить патч'
             $BtnStep3CloseAg.Visibility = 'Collapsed'
         }
@@ -514,7 +520,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
             } elseif (($i + 1) -lt $s) {
                 $pills[$i].Background  = $bc.ConvertFromString('#161B19')
                 $pills[$i].BorderBrush = $bc.ConvertFromString('#2B3A33')
-                $lbls[$i].Foreground   = $bc.ConvertFromString($accent)
+                $lbls[$i].Foreground   = $bc.ConvertFromString($accentText)
                 $lbls[$i].FontWeight   = [System.Windows.FontWeights]::Normal
             } else {
                 $pills[$i].Background  = $bc.ConvertFromString('#16181D')
@@ -544,6 +550,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
         param([bool]$IsBusy)
         $state.Busy = $IsBusy
         $BtnStep1Enable.IsEnabled   = (-not $IsBusy)
+        if ($null -ne $BtnStep1SkipVpn) { $BtnStep1SkipVpn.IsEnabled = (-not $IsBusy) }
         $BtnStep3Patch.IsEnabled    = (-not $IsBusy)
         $BtnStep3CloseAg.IsEnabled  = (-not $IsBusy)
         $BtnStep3LaunchAg.IsEnabled = (-not $IsBusy)
@@ -584,11 +591,11 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                     if ($act -like 'patch*' -and $outTxt -match '\[OK\]') {
                         $state.PatchedOk = $true
                         $TxtStep3Hint.Text = 'Патч успешно применён! Можно запустить Antigravity или нажать «Завершить →».'
-                        $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+                        $TxtStep3Hint.Foreground = $bc.ConvertFromString($accentText)
                     } elseif ($act -like 'close*') {
                         if ($outTxt -match '\[OK\]') {
                             $TxtStep3Hint.Text = 'Процессы Antigravity закрыты.'
-                            $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+                            $TxtStep3Hint.Foreground = $bc.ConvertFromString($accentText)
                         } else {
                             $TxtStep3Hint.Text = 'Проверь статус процессов в логе ниже.'
                             $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D9B066')
@@ -596,7 +603,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                     } elseif ($act -like 'restore*' -and $outTxt -match '\[OK\]') {
                         $state.PatchedOk = $false
                         $TxtStep3Hint.Text = 'Оригинальные файлы восстановлены из бэкапов *.agybak.'
-                        $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+                        $TxtStep3Hint.Foreground = $bc.ConvertFromString($accentText)
                     } elseif ($outTxt -match '\[X\]') {
                         $TxtStep3Hint.Text = 'Операция остановлена — смотри лог ниже.'
                         $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D97777')
@@ -622,7 +629,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                 $BtnWizNext.IsEnabled = (-not [string]::IsNullOrWhiteSpace($state.ModulePath))
                 if (-not $hadMod -and $state.ModulePath) {
                     $TxtStep2Msg.Text = 'Модуль обнаружен автоматически! Нажми «Далее →».'
-                    $TxtStep2Msg.Foreground = $bc.ConvertFromString($accent)
+                    $TxtStep2Msg.Foreground = $bc.ConvertFromString($accentText)
                 }
             }
         }
@@ -666,6 +673,19 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
         }
     })
 
+    if ($null -ne $BtnStep1SkipVpn) {
+        $BtnStep1SkipVpn.Add_Click({
+            if ($state.Busy) { return }
+            & $refreshChecks
+            if (-not [string]::IsNullOrWhiteSpace($state.ModulePath)) {
+                $state.Step = 3
+            } else {
+                $state.Step = 2
+            }
+            & $renderStep
+        })
+    }
+
     $BtnStep2Download.Add_Click({
         try { Start-Process $releaseUrl } catch {}
     })
@@ -687,7 +707,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                 & $refreshChecks
                 if ($state.ModulePath) {
                     $TxtStep2Msg.Text = 'Архив успешно распакован! Перехожу к Шагу 3...'
-                    $TxtStep2Msg.Foreground = $bc.ConvertFromString($accent)
+                    $TxtStep2Msg.Foreground = $bc.ConvertFromString($accentText)
                     $state.Step = 3
                     & $renderStep
                 } else {
@@ -759,7 +779,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
             try {
                 Start-Process -FilePath $agExe
                 $TxtStep3Hint.Text = "Запущен: $agExe"
-                $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+                $TxtStep3Hint.Foreground = $bc.ConvertFromString($accentText)
             } catch {
                 $TxtStep3Hint.Text = "Не удалось запустить Antigravity: $($_.Exception.Message)"
                 $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D97777')
@@ -778,7 +798,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                 if ([bool]$ChkAgAutoPatch.IsChecked) {
                     [System.IO.File]::WriteAllText($agAutoPatchFlag, '', (New-Object System.Text.UTF8Encoding($false)))
                     $TxtStep3Hint.Text = 'Авто-патч после обновлений включён.'
-                    $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+                    $TxtStep3Hint.Foreground = $bc.ConvertFromString($accentText)
                 } else {
                     if (Test-Path -LiteralPath $agAutoPatchFlag -PathType Leaf) {
                         Remove-Item -LiteralPath $agAutoPatchFlag -Force -ErrorAction SilentlyContinue
@@ -829,7 +849,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                 $sc.Save()
 
                 $TxtStep3Hint.Text = 'Ярлык «Antigravity (Котек)» создан на Рабочем столе.'
-                $TxtStep3Hint.Foreground = $bc.ConvertFromString($accent)
+                $TxtStep3Hint.Foreground = $bc.ConvertFromString($accentText)
             } catch {
                 $TxtStep3Hint.Text = "Не удалось создать ярлык: $($_.Exception.Message)"
                 $TxtStep3Hint.Foreground = $bc.ConvertFromString('#D97777')

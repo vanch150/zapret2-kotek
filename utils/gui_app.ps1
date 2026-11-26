@@ -260,6 +260,7 @@ $TxtAiPendingHint   = $win.FindName('TxtAiPendingHint')
 $BdAiClaudeWarn     = $win.FindName('BdAiClaudeWarn')
 $BdAiAntigravityHint= $win.FindName('BdAiAntigravityHint')
 $BtnAiAntigravityHelper = $win.FindName('BtnAiAntigravityHelper')
+$BtnToolAntigravity = $win.FindName('BtnToolAntigravity')
 $script:AiAppliedServicesStr = ''
 $script:AiNeedsRestart = $false
 $script:AiServiceCheckMap = [ordered]@{
@@ -624,7 +625,7 @@ function Set-Z2BusyUiState([bool]$IsBusy) {
         $BtnTgConnect, $BtnTgToggle, $BtnUdpOpt, $CmbUdpFake, $CmbQuickStrat, $CmbTgMode,
         $CmbIpsetMode, $BtnDiag, $BtnUpdateLists, $BtnCheckUpdate, $BtnUninstall,
         $ChkAutoHost, $ChkWarp, $ChkGameFilter, $ChkKernelFilter, $ChkNlmVpn, $BtnNlmConfig,
-        $BtnBrowserFix, $ChkBrowserQuic, $BtnEditGenUser, $BtnEditExUser,
+        $BtnBrowserFix, $ChkBrowserQuic, $BtnToolAntigravity, $BtnEditGenUser, $BtnEditExUser,
         $BtnAiToggle, $BtnAiProbe, $CmbAiMode, $BtnAiSelAll, $ChkAiVpnAutoPause,
         $ChkAi_gemini, $ChkAi_chatgpt, $ChkAi_claude, $ChkAi_copilot, $ChkAi_grok, $ChkAi_perplexity, $ChkAi_ide_ai, $ChkAi_antigravity, $BtnPause
     )
@@ -1056,11 +1057,13 @@ function Load-Strategies([string]$tab) {
         'general (ALT7)'           = @('syndata',       'Чистый multisplit seqovl + syndata в TCP SYN (без зависимости от tcp_ts)')
         'general (FAKE TLS AUTO)'  = @('multidisorder', 'Обратный порядок сегментов + badseq/badack — работает там, где tcp_ts не идёт')
         'custom_wssize_antifreeze' = @('wssize',        'Антифриз TCP-окна (wssize) + multisplit против 16-КБ шейпинга скорости')
-        'custom_md5_disorder'      = @('tcp_md5',       'fakeddisorder + hostfakesplit с подписью TCP MD5 (без tcp_ts)')
-        'custom_youtube_south'     = @('fakedsplit',    'Оптимизирована под региональные кэши YouTube и южных провайдеров')
-        'custom_clean_disorder'    = @('multidisorder', 'Чистый multidisorder + seqovl без фейков (когда ТСПУ режет любые фейки)')
-        'custom_badsum_hostfake'   = @('badsum',        'hostfakesplit:disorder_after + badsum + ip_autottl (без tcp_ts)')
-        'custom_fakeddisorder_pad' = @('padencap',      'fakeddisorder + tcp_seq/tcp_ack + tls_mod=rnd,dupsid,padencap (без tcp_ts)')
+        'custom_md5_disorder'         = @('tcp_md5',       'fakeddisorder + hostfakesplit с TCP MD5 + tcp_ack (без tcp_ts)')
+        'custom_youtube_south'        = @('fakedsplit',    'Оптимизирована под региональные кэши YouTube и южных провайдеров')
+        'custom_clean_disorder'       = @('multidisorder', 'Чистый multidisorder + seqovl без фейков (когда ТСПУ режет любые фейки)')
+        'custom_badsum_hostfake'      = @('badsum',        'hostfakesplit:disorder_after + badsum + autottl/tcp_ack (без tcp_ts)')
+        'custom_fakeddisorder_pad'    = @('padencap',      'fakeddisorder + tcp_seq/tcp_ack + tls_mod=rnd,dupsid,padencap (без tcp_ts)')
+        'custom_tls_clone_autottl'    = @('tls_clone',     'Клонирование реального TLS ClientHello + AutoTTL/tcp_ack + multisplit (без tcp_ts)')
+        'custom_udplen_multidisorder' = @('udplen',        'Чистый multidisorder seqovl (TCP) + удлинение UDP-пакетов udplen (QUIC/Discord)')
         'custom_youtube_wssize'    = @('wssize YT',     'Точечный wssize на list-google.txt + multidisorder против 16-КБ фриза YouTube')
         'custom_domru_spb'         = @('fakedsplit',    'Лёгкий профиль с минимумом фейков и низким пингом (Дом.ру / СПб)')
         'custom_auto_circular'     = @('circular',      'Авто-ротация 5 механик при сбоях (экспериментальная)')
@@ -2429,6 +2432,18 @@ function Update-Z2AiSpecialHints {
 
 if ($null -ne $BtnAiAntigravityHelper) {
     $BtnAiAntigravityHelper.Add_Click({
+        if (Get-Command Show-Z2AntigravityDialog -ErrorAction SilentlyContinue) {
+            if (Show-Z2AntigravityDialog $Root $win $AccentHex) {
+                if (Get-Command Refresh-Dashboard -ErrorAction SilentlyContinue) { Refresh-Dashboard }
+            }
+        } else {
+            try { Start-Process 'https://github.com/vanch150/kotek-antigravity-helper/releases/latest' } catch {}
+        }
+    })
+}
+
+if ($null -ne $BtnToolAntigravity) {
+    $BtnToolAntigravity.Add_Click({
         if (Get-Command Show-Z2AntigravityDialog -ErrorAction SilentlyContinue) {
             if (Show-Z2AntigravityDialog $Root $win $AccentHex) {
                 if (Get-Command Refresh-Dashboard -ErrorAction SilentlyContinue) { Refresh-Dashboard }
