@@ -190,7 +190,7 @@ function Get-TgWsConfig([switch]$ReadOnly) {
         host = '127.0.0.1'
         port = '1443'
         secret = ''
-        mode = 'smart'
+        mode = 'cfonly'
         pool_size = '4'
         cfproxy_domain = ''
         cfproxy_worker_domain = ''
@@ -237,8 +237,8 @@ function Get-TgWsConfig([switch]$ReadOnly) {
     }
 
     $m = ([string]$cfg['mode']).Trim().ToLowerInvariant()
-    if (@('smart', 'direct', 'cfonly') -notcontains $m) {
-        $cfg['mode'] = 'smart'
+    if (@('cfonly', 'direct') -notcontains $m) {
+        $cfg['mode'] = 'cfonly'
         $needSave = $true
     } else {
         $cfg['mode'] = $m
@@ -635,7 +635,7 @@ while ($true) {
     }
     Write-Host '  --------------------------------------------------------------'
     Write-Host '  [1] Подключить Telegram в 1 клик (Запуск службы + открытие TG)' -ForegroundColor Green
-    Write-Host '  [2] Переключить режим прокси (smart / direct / cfonly)'
+    Write-Host '  [2] Переключить режим прокси (cfonly / direct)'
     Write-Host '  [3] Остановить и удалить службу TG WS Proxy'
     Write-Host '  [4] Показать ссылку прокси и последние строки лога'
     Write-Host '  [0] Назад в главное меню'
@@ -658,7 +658,7 @@ while ($true) {
         if (-not (Test-Z2IsAdmin)) {
             Write-Host "`n  [X] Требуются права администратора для переключения режима и перезапуска службы." -ForegroundColor Red
         } else {
-            $modes = @('smart', 'direct', 'cfonly')
+            $modes = @('cfonly', 'direct')
             $curIdx = [array]::IndexOf($modes, $cfg['mode'])
             if ($curIdx -lt 0) { $curIdx = 0 }
             $nextMode = $modes[($curIdx + 1) % $modes.Length]

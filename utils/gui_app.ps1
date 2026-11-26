@@ -546,17 +546,15 @@ $ImgKotek.Add_MouseRightButtonDown({
 
 
 $script:SuppressTgModeEvent = $true
-$script:TgModeKeys = @('smart', 'direct', 'cfonly')
-$script:TgModeLabels = @('smart (авто)', 'direct (прямой)', 'cfonly (CF)')
+$script:TgModeKeys = @('cfonly', 'direct')
+$script:TgModeLabels = @('Cloudflare (рекомендуется)', 'Прямой WS')
 $script:TgModeHints = @{
-    'smart'  = 'Авто (прямой → CF)'
-    'direct' = 'Только прямой WS'
-    'cfonly' = 'Только Cloudflare'
+    'cfonly' = 'Cloudflare (рекомендуется)'
+    'direct' = 'Прямой WS'
 }
 $script:TgModeTooltips = @(
-    'Рекомендуемый режим: сначала пробует прямое подключение к Telegram, при блокировке мгновенно переключается на Cloudflare.',
-    'Только прямое WebSocket-подключение к серверам Telegram без Cloudflare (минимальный пинг, если IP Telegram не заблокированы).',
-    'Всегда через пул чистых IP Cloudflare (выбирай, если провайдер наглухо блокирует прямые IP Telegram).'
+    'Рекомендуемый режим: всегда через пул чистых IP Cloudflare (стабильно работает даже при блокировке прямых IP Telegram).',
+    'Только прямое WebSocket-подключение к серверам Telegram без Cloudflare (минимальный пинг, если IP Telegram не заблокированы).'
 )
 for ($ti = 0; $ti -lt $script:TgModeLabels.Count; $ti++) {
     $cbi = New-Object System.Windows.Controls.ComboBoxItem
@@ -617,6 +615,12 @@ $script:AgBgProc          = $null
 $script:AgBgOutFile       = ''
 $script:AgBgPhase         = ''
 $script:AgNeedPatchToasted = $false
+$script:HealthCheckTimer  = $null
+$script:HealthBgProc      = $null
+$script:HealthBgOutFile   = ''
+$script:HealthBgStartUtc  = [DateTime]::MinValue
+$script:HealthFailStreak  = 0
+$script:HealthWarnShown   = $false
 
 function Set-Z2BusyUiState([bool]$IsBusy) {
     $enabled = -not $IsBusy
@@ -1230,10 +1234,14 @@ function Refresh-Dashboard {
         $rv = (Get-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Services\zapret' -Name 'zapret-discord-youtube' -ErrorAction SilentlyContinue).'zapret-discord-youtube'
         if (-not [string]::IsNullOrWhiteSpace($rv)) { $strat = $rv }
     } catch {}
+    if ($script:ActiveStratName -and $script:ActiveStratName -ine $strat) {
+        $script:HealthWarnShown  = $false
+        $script:HealthFailStreak = 0
+    }
     $script:ActiveStratName = $strat
     $TxtSideStrat.Text = $strat
 
-    $tgMode = 'smart'; $tgHost = '127.0.0.1'; $tgPort = '1443'
+    $tgMode = 'cfonly'; $tgHost = '127.0.0.1'; $tgPort = '1443'
     $tgConf = Join-Path $Root 'utils\tgws_proxy.conf'
     if (Test-Path -LiteralPath $tgConf) {
         foreach ($l in (Get-Content -LiteralPath $tgConf -Encoding UTF8)) {
@@ -1242,13 +1250,17 @@ function Refresh-Dashboard {
             elseif ($l -match '^(?i)port=(\d+)$') { $tgPort = $matches[1].Trim() }
         }
     }
+    $tgModeNorm = $tgMode.ToLowerInvariant()
+    if ($tgModeNorm -eq 'smart' -or $script:TgModeKeys -notcontains $tgModeNorm) {
+        $tgModeNorm = 'cfonly'
+    }
 
     $svcTg = Get-Service -Name 'zapret-tgws' -ErrorAction SilentlyContinue
     $script:SuppressTgModeEvent = $true
-    $mIdx = [Array]::IndexOf(@('smart','direct','cfonly'), $tgMode.ToLowerInvariant())
+    $mIdx = [Array]::IndexOf([string[]]$script:TgModeKeys, $tgModeNorm)
     if ($mIdx -ge 0) { $CmbTgMode.SelectedIndex = $mIdx }
     $script:SuppressTgModeEvent = $false
-    $modeHint = if ($script:TgModeHints.ContainsKey($tgMode.ToLowerInvariant())) { $script:TgModeHints[$tgMode.ToLowerInvariant()] } else { $tgMode }
+    $modeHint = if ($script:TgModeHints.ContainsKey($tgModeNorm)) { $script:TgModeHints[$tgModeNorm] } else { $tgModeNorm }
     if ($null -ne $svcTg -and $svcTg.Status -eq 'Running') {
         $TxtTgStatusLine.Text = "Активен · ${tgHost}:${tgPort} · $modeHint"
         $TxtTgStatusLine.Foreground = $bc.ConvertFromString($AccentLightHex)
@@ -1686,6 +1698,7 @@ $script:CatTimer.Add_Tick({
                             try { $tmr.Stop() } catch {}
                             try { $script:CatTimer.Stop() } catch {}
                             try { $script:WakeTimer.Stop() } catch {}
+                            if ($null -ne $script:HealthCheckTimer) { try { $script:HealthCheckTimer.Stop() } catch {} }
                             $script:ForceExitGui = $true
                             Dispose-Z2TrayIcon
                             if ($null -ne $script:ShowWindowEvent) {
@@ -1874,6 +1887,8 @@ function Run-ConsoleTool([string]$ScriptRel, [string]$ExtraArgs = '', [bool]$Kee
 }
 
 function Install-Strategy([string]$BatFullPath) {
+    $script:HealthWarnShown  = $false
+    $script:HealthFailStreak = 0
     $batName = [System.IO.Path]::GetFileName($BatFullPath)
     $escBat = $BatFullPath.Replace("'", "''")
     Run-ConsoleTool 'utils\apply_strategy.ps1' "-BatPath '$escBat'" $false "Установка $batName" $BtnApplyStrat
@@ -3377,6 +3392,102 @@ $script:WakeTimer.Add_Tick({
 })
 $script:WakeTimer.Start()
 
+# Soft background strategy degradation detector (20 min interval, first run >= 5 min after GUI start; notification only, never restarts zapret)
+$script:HealthCheckTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:HealthCheckTimer.Interval = [TimeSpan]::FromMinutes(5)
+$script:HealthCheckTimer.Add_Tick({
+    try {
+        if ($null -ne $script:HealthBgProc) {
+            if (-not $script:HealthBgProc.HasExited) {
+                if (([DateTime]::UtcNow - $script:HealthBgStartUtc).TotalSeconds -ge 25) {
+                    try { $script:HealthBgProc.Kill() } catch {}
+                    try { $script:HealthBgProc.Dispose() } catch {}
+                    $script:HealthBgProc = $null
+                    if ($script:HealthBgOutFile -and (Test-Path -LiteralPath $script:HealthBgOutFile -PathType Leaf)) {
+                        Remove-Item -LiteralPath $script:HealthBgOutFile -Force -ErrorAction SilentlyContinue
+                    }
+                    $script:HealthBgOutFile = ''
+                    $script:HealthCheckTimer.Interval = [TimeSpan]::FromMinutes(20)
+                }
+                return
+            }
+
+            $hOut = ''
+            if ($script:HealthBgOutFile -and (Test-Path -LiteralPath $script:HealthBgOutFile -PathType Leaf)) {
+                try { $hOut = ([System.IO.File]::ReadAllText($script:HealthBgOutFile, [System.Text.Encoding]::UTF8)).Trim() } catch {}
+                Remove-Item -LiteralPath $script:HealthBgOutFile -Force -ErrorAction SilentlyContinue
+            }
+            try { $script:HealthBgProc.Dispose() } catch {}
+            $script:HealthBgProc    = $null
+            $script:HealthBgOutFile = ''
+            $script:HealthCheckTimer.Interval = [TimeSpan]::FromMinutes(20)
+
+            if ($hOut -eq 'OK') {
+                $script:HealthFailStreak = 0
+            } elseif ($hOut -eq 'FAIL' -and -not $script:HealthWarnShown -and -not $script:BgOpBusy -and ($null -eq $script:WatchedProc -or $script:WatchedProc.HasExited)) {
+                $svcChk = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+                $zStillRun = ($null -ne $svcChk -and $svcChk.Status -eq 'Running')
+                if ($null -ne $svcChk) { try { $svcChk.Dispose() } catch {} }
+                if ($zStillRun) {
+                    $script:HealthFailStreak++
+                    if ($script:HealthFailStreak -ge 2) {
+                        $script:HealthWarnShown  = $true
+                        $script:HealthFailStreak = 0
+                        Show-Toast 'Похоже, текущая стратегия перестала пробивать YouTube/Discord — попробуй «Настроить быстро» или «Конструктор 5 мин»' $true
+                    }
+                }
+            }
+            return
+        }
+
+        $script:HealthCheckTimer.Interval = [TimeSpan]::FromMinutes(20)
+        if ($script:HealthWarnShown) { return }
+        if ($script:BgOpBusy -or ($null -ne $script:WatchedProc -and -not $script:WatchedProc.HasExited)) { return }
+
+        $svcH = Get-Service -Name 'zapret' -ErrorAction SilentlyContinue
+        $zRunH = ($null -ne $svcH -and $svcH.Status -eq 'Running')
+        if ($null -ne $svcH) { try { $svcH.Dispose() } catch {} }
+        if (-not $zRunH) {
+            $script:HealthFailStreak = 0
+            return
+        }
+
+        $tmpHealthOut = Join-Path $env:TEMP ("z2_health_{0}_{1}.txt" -f $PID, [Guid]::NewGuid().ToString('N').Substring(0, 8))
+        $b64Out = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($tmpHealthOut))
+        $probeScript = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$outPath = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('$b64Out'))
+`$u8nb = New-Object System.Text.UTF8Encoding(`$false)
+`$curl = "`$env:SystemRoot\System32\curl.exe"
+if (-not (Test-Path -LiteralPath `$curl)) { `$curl = 'curl.exe' }
+`$baseCode = ((& `$curl -4 -s -o NUL -w '%{http_code}' --max-time 4 'https://ya.ru' 2>`$null) | Out-String).Trim()
+if (`$baseCode -notmatch '^(200|301|302|403)$') {
+    [System.IO.File]::WriteAllText(`$outPath, 'NO_NET', `$u8nb)
+    exit 0
+}
+`$ytCode = ((& `$curl -4 -s -o NUL -w '%{http_code}' --max-time 4 'https://www.youtube.com' 2>`$null) | Out-String).Trim()
+`$dcCode = ((& `$curl -4 -s -o NUL -w '%{http_code}' --max-time 4 'https://discord.com' 2>`$null) | Out-String).Trim()
+`$ytOk = (`$ytCode -match '^(200|204|301|302|307|308)$')
+`$dcOk = (`$dcCode -match '^(200|204|301|302|307|308)$')
+`$res = if ((-not `$ytOk -and -not `$dcOk) -or (-not `$ytOk)) { 'FAIL' } else { 'OK' }
+[System.IO.File]::WriteAllText(`$outPath, `$res, `$u8nb)
+"@
+        $b64Probe = [System.Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($probeScript))
+        $psiH = New-Object System.Diagnostics.ProcessStartInfo
+        $psiH.FileName = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe"
+        $psiH.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -EncodedCommand $b64Probe"
+        $psiH.UseShellExecute = $false
+        $psiH.CreateNoWindow = $true
+        $script:HealthBgProc = [System.Diagnostics.Process]::Start($psiH)
+        $script:HealthBgOutFile = $tmpHealthOut
+        $script:HealthBgStartUtc = [DateTime]::UtcNow
+        $script:HealthCheckTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+    } catch {
+        $script:HealthCheckTimer.Interval = [TimeSpan]::FromMinutes(20)
+    }
+})
+$script:HealthCheckTimer.Start()
+
 $trayOn      = (Test-Path -LiteralPath (Join-Path $Root 'utils\tray_mode.enabled'))
 $trayMinOn   = $trayOn -and (Test-Path -LiteralPath (Join-Path $Root 'utils\tray_start_minimized.enabled'))
 # Manual launch from folder (without -StartInTray) ALWAYS opens in windowed mode; only startup task (-StartInTray) starts hidden
@@ -3476,6 +3587,17 @@ if ($startHidden) {
 }
 [void]$script:WpfApp.Run()
 $script:WakeTimer.Stop()
+if ($null -ne $script:HealthCheckTimer) {
+    try { $script:HealthCheckTimer.Stop() } catch {}
+}
+if ($null -ne $script:HealthBgProc) {
+    try { if (-not $script:HealthBgProc.HasExited) { $script:HealthBgProc.Kill() } } catch {}
+    try { $script:HealthBgProc.Dispose() } catch {}
+    $script:HealthBgProc = $null
+}
+if ($script:HealthBgOutFile -and (Test-Path -LiteralPath $script:HealthBgOutFile -PathType Leaf)) {
+    Remove-Item -LiteralPath $script:HealthBgOutFile -Force -ErrorAction SilentlyContinue
+}
 if ($null -ne $script:AgAutoPatchTimer) {
     try { $script:AgAutoPatchTimer.Stop() } catch {}
 }

@@ -1135,7 +1135,7 @@ namespace ZapretTgWsProxy
         public int Port = 1443;
         public string SecretHex = "";
         public byte[] SecretBytes;
-        public string Mode = "smart"; // smart | direct | cfonly
+        public string Mode = "cfonly"; // cfonly | direct
         public int PoolSize = 4;
         public int BufferSize = 256 * 1024;
         public bool FallbackCfProxy = true;
@@ -1406,10 +1406,15 @@ namespace ZapretTgWsProxy
                 throw new ArgumentException(portErr);
             }
 
-            string m = (Mode ?? "smart").Trim().ToLowerInvariant();
-            if (m != "smart" && m != "direct" && m != "cfonly")
+            string m = (Mode ?? "cfonly").Trim().ToLowerInvariant();
+            if (m == "smart")
             {
-                string modeErr = "Invalid Mode '" + m + "': expected smart, direct, or cfonly.";
+                m = "cfonly";
+                Log("INFO", "Legacy mode 'smart' normalized to 'cfonly'.");
+            }
+            if (m != "direct" && m != "cfonly")
+            {
+                string modeErr = "Invalid Mode '" + m + "': expected cfonly or direct.";
                 Log("ERROR", modeErr);
                 throw new ArgumentException(modeErr);
             }
@@ -3174,7 +3179,7 @@ namespace ZapretTgWsProxy
             Console.WriteLine("------------------------------------------------------------------------");
             if (directOk || cfWssOk || cfWs80Ok)
             {
-                Console.WriteLine("  Result: READY! Telegram will connect without WARP in Smart & CF modes.");
+                Console.WriteLine("  Result: READY! Telegram will connect without WARP in CF mode.");
             }
             else
             {

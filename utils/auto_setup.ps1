@@ -416,7 +416,7 @@ foreach ($cand in $Candidates) {
         }
     }
 
-    $cfFreezeOk = $false; $ytFreezeOk = $false; $canaryOk = $false
+    $cfFreezeOk = $false; $ytPageOk = $false; $ytImgOk = $false; $ytFreezeOk = $false; $canaryOk = $false
     foreach ($line in $rawLines) {
         $tr = $line.Trim()
         if (-not $tr) { continue }
@@ -441,6 +441,7 @@ foreach ($cand in $Candidates) {
         if ($parts.Count -ge 6) { [void][double]::TryParse($parts[5].Trim().Replace(',', '.'), [System.Globalization.NumberStyles]::Float, $invCulture, [ref]$spdBytes) }
         if (-not $exitOk) { continue }
         if ($code -match '^(200|204|301|302|307|308|400|403|404)$') {
+            if ($uEff -match 'redirector\.googlevideo\.com' -and $code -notmatch '^(200|204|301|302)$') { continue }
             if ($uEff -match '^https?://www\.youtube\.com/?$' -and $code -eq '200' -and $dlBytes -lt 65536) { continue }
             if ($uEff -match 'speed\.cloudflare\.com') {
                 $cfMin = if ($uEff -match '262144') { 200000L } else { 50000L }
@@ -449,14 +450,18 @@ foreach ($cand in $Candidates) {
             }
             $okCount++
             $totalMs += ($secVal * 1000.0)
-            if (($uEff -match 'i\.ytimg\.com/.+maxresdefault\.jpg' -or $uEff -match '^https?://www\.youtube\.com/?$') -and $code -eq '200' -and $dlBytes -ge 65536 -and $spdBytes -ge 40000) {
-                $ytFreezeOk = $true
+            if ($uEff -match '^https?://www\.youtube\.com/?$' -and $code -eq '200' -and $dlBytes -ge 65536) {
+                $ytPageOk = $true
+            }
+            if ($uEff -match 'i\.ytimg\.com/.+maxresdefault\.jpg' -and $code -eq '200' -and $dlBytes -ge 65536 -and $spdBytes -ge 40000) {
+                $ytImgOk = $true
             }
             if ($uEff -match 'youtube\.com|ytimg\.com|ggpht\.com|googleapis\.com|googlevideo\.com') { $ytHits++ }
             if ($uEff -match 'discord\.com|discordapp\.com|discord\.gg') { $dcHits++ }
             if ($uEff -match 'githubusercontent\.com|github\.com') { $canaryOk = $true }
         }
     }
+    $ytFreezeOk = ($ytPageOk -and $ytImgOk)
     $freezeOk = ($cfFreezeOk -and $ytFreezeOk)
 
     if ($proc -and -not $proc.HasExited) {

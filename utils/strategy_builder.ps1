@@ -74,6 +74,7 @@ $TechDefs = @(
     [PSCustomObject]@{ Id = 'multisplit_seqovl';    Label = 'multisplit:seqovl=681';       NeedsFooling = $false },
     [PSCustomObject]@{ Id = 'multidisorder_seqovl'; Label = 'multidisorder:seqovl=host';   NeedsFooling = $false },
     [PSCustomObject]@{ Id = 'hostfakesplit';        Label = 'hostfakesplit:disorder_after'; NeedsFooling = $true },
+    [PSCustomObject]@{ Id = 'fakedsplit';           Label = 'fakedsplit:pos=midsld';       NeedsFooling = $true },
     [PSCustomObject]@{ Id = 'fakeddisorder';        Label = 'fakeddisorder:pos=midsld';    NeedsFooling = $true },
     [PSCustomObject]@{ Id = 'tls_clone';            Label = 'tls_client_hello_clone';      NeedsFooling = $true }
 )
@@ -151,6 +152,13 @@ function Get-Z2BuilderTcpChain {
                 return "--out-range=-d10 --payload=tls_client_hello --lua-desync=hostfakesplit:host=google.com:midhost=midsld:disorder_after${hfFool} $httpPart"
             }
             return "--out-range=-d10 --payload=tls_client_hello --lua-desync=hostfakesplit:host=google.com:midhost=midsld:disorder_after${hfFool}${ipIdSuffix}"
+        }
+        'fakedsplit' {
+            $fsFool = if ($isClean) { '' } else { ":${fOpt}" }
+            if ($IncludeHttp) {
+                return "--out-range=-d10 --payload=tls_client_hello --lua-desync=fakedsplit:pos=midsld:blob=tls_google:tls_mod=rnd,dupsid${fsFool} --payload=http_req --lua-desync=fakedsplit:pos=midsld:blob=fake_default_http${fsFool}"
+            }
+            return "--out-range=-d10 --payload=tls_client_hello --lua-desync=fakedsplit:pos=midsld:blob=tls_google:tls_mod=rnd,dupsid${fsFool}${ipIdSuffix}"
         }
         'fakeddisorder' {
             $fdFool = if ($isClean) { '' } else { ":${fOpt}" }
@@ -504,13 +512,14 @@ if ($DryRun) {
             @{ Stage = 'Stage2'; Fooling = 'badsum';  Tech = 'multisplit_seqovl';    Wssize = $false; Udp = 'fake';   Expect = @('multisplit:pos=1,midsld:seqovl=681:seqovl_pattern=tls_google') },
             @{ Stage = 'Stage2'; Fooling = 'tcp_ts';  Tech = 'multidisorder_seqovl'; Wssize = $false; Udp = 'fake';   Expect = @('multidisorder:pos=midsld:seqovl=host') },
             @{ Stage = 'Stage2'; Fooling = 'tcp_md5'; Tech = 'hostfakesplit';        Wssize = $false; Udp = 'fake';   Expect = @('hostfakesplit:host=google.com:midhost=midsld:disorder_after') },
+            @{ Stage = 'Stage2'; Fooling = 'tcp_ts';  Tech = 'fakedsplit';           Wssize = $false; Udp = 'fake';   Expect = @('fakedsplit:pos=midsld:blob=tls_google:tls_mod=rnd,dupsid:tcp_ts=-600000', 'fakedsplit:pos=midsld:blob=fake_default_http:tcp_ts=-600000') },
             @{ Stage = 'Stage2'; Fooling = 'badseq';  Tech = 'fakeddisorder';        Wssize = $false; Udp = 'fake';   Expect = @('fakeddisorder:pos=midsld') },
             @{ Stage = 'Stage2'; Fooling = 'autottl'; Tech = 'tls_clone';            Wssize = $false; Udp = 'fake';   Expect = @('tls_client_hello_clone:', 'fallback=tls_google', '--wf-tcp-in=') },
             @{ Stage = 'Stage2w'; Fooling = 'badsum'; Tech = 'multisplit_seqovl';    Wssize = $true;  Udp = 'fake';   Expect = @('--wf-tcp-empty=1', 'wssize:wsize=1:scale=6:forced_cutoff=tls_client_hello,http_req', '--wf-tcp-in=') },
             @{ Stage = 'Stage3'; Fooling = 'autottl'; Tech = 'tls_clone';            Wssize = $false; Udp = 'udplen'; Expect = @('udplen:increment=4', 'fake_default_http') }
         )
 
-        Write-Host ("  [*] Матрица конструктора: Stage 1 = {0} fooling, Stage 2 = до 7-8 прогонов (5 техник + wssize), Stage 3 = UDP + CORE (итого <= 16 прогонов)" -f $FoolingDefs.Count) -ForegroundColor Cyan
+        Write-Host ("  [*] Матрица конструктора: Stage 1 = {0} fooling, Stage 2 = до 8-9 прогонов (6 техник + wssize), Stage 3 = UDP + CORE (итого <= 18 прогонов)" -f $FoolingDefs.Count) -ForegroundColor Cyan
         Write-Host ("  [*] Быстрых целей: {0}, CORE целей: {1}" -f $FastTargets.Count, $CoreTargets.Count) -ForegroundColor Gray
 
         $idx = 0
@@ -578,7 +587,7 @@ Stop-Z2ServiceAndProcess -ServiceName 'zapret' -ServiceTimeoutSec 5 -ProcessTime
 $appliedNewStrategy = $false
 $exitCode = 0
 $stepCur = 0
-$stepEstTotal = 16
+$stepEstTotal = 17
 
 try {
     # --------------------------------------------------------------------------
