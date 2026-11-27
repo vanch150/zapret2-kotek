@@ -65,6 +65,12 @@
 <p align="center"><sub>Исключение VPN-адаптеров (WinDivert)</sub></p>
 </td>
 </tr>
+<tr>
+<td colspan="2" align="center">
+<img src="docs/screenshots/antigravity_dialog.png" width="620" alt="Мастер настройки Google Antigravity" />
+<p align="center"><sub>Мастер настройки и патчер Google Antigravity (Шаг 3)</sub></p>
+</td>
+</tr>
 </table>
 
 ## Что стоит учитывать
@@ -79,7 +85,7 @@
 
 - **Ядро:** `bin\winws2.exe` из [bol-van/zapret2](https://github.com/bol-van/zapret2) (1.0.7), Lua-скрипты (`lua\`) и ядерные фильтры `bin\filters\windivert_part.*`. Списки и `.bin`-фейки на базе [Flowseal/zapret-discord-youtube](https://github.com/Flowseal/zapret-discord-youtube) (1.10.4).
 - **Стратегии:** 12 активных нативных стратегий (`strategies\`) и 16 в архиве (`configs_archive\`), бенчмарк по 27 целям + 256-КБ проверка по `speed.cloudflare.com` и проверка объёма/скорости по YouTube, синтез гибрида (`utils\deep_optimize.ps1`) и 5-минутный пошаговый Конструктор с нуля (`utils\strategy_builder.ps1`).
-- **Telegram Proxy:** C# 5 сервис (`utils\TgWsProxyService.cs`, собирается системным `.NET 4.x csc.exe`), служба `zapret-tgws` под `NT AUTHORITY\NetworkService`, loopback `127.0.0.1:1443`, режимы `smart` / `direct` / `cfonly`, равноправная гонка `ws://:80` и `wss://:443`.
+- **Telegram Proxy:** C# 5 сервис (`utils\TgWsProxyService.cs`, собирается системным `.NET 4.x csc.exe`), служба `zapret-tgws` под `NT AUTHORITY\NetworkService`, loopback `127.0.0.1:1443`, режимы `cfonly` (по умолчанию) / `direct`, равноправная гонка `ws://:80` и `wss://:443`.
 - **Обход ИИ:** точечные правила Windows NRPT (`utils\ai_bypass_helper.ps1`) на пул SmartDNS (`lists\ai-dns-pool.txt`) с различением split-tunnel/full-tunnel VPN, исключением LAN/mesh-сетей и опциональной автопаузой при full-tunnel VPN.
 - **Автообновление:** `utils\self_update.ps1` с обязательной проверкой `SHA256SUMS.txt` (fail-closed), защитой от Zip-Slip, сохранением пользовательских списков (`*-user.txt`, `ai-custom-domains.txt`, `targets.txt`) и задачей Планировщика в простое ПК.
 - **CLI:** для работы без GUI поддерживается `!_START_KOTEK.bat --cli`.
