@@ -119,7 +119,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Мастер настройки Google Antigravity — Zapret2 Kotek"
-        Width="670" Height="560" MinWidth="620" MinHeight="510"
+        Width="780" Height="640" MinWidth="700" MinHeight="580"
         WindowStartupLocation="CenterOwner" ResizeMode="CanResize"
         Background="#121316" Foreground="#D4D7DD" FontFamily="Segoe UI">
     <Window.Resources>
@@ -198,6 +198,87 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
+        </Style>
+
+        <!-- Slim Dark ScrollBar (Vertical & Horizontal) -->
+        <Style TargetType="ScrollBar">
+            <Setter Property="Width" Value="6"/>
+            <Setter Property="MinWidth" Value="6"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent" Margin="1,2,1,2">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Opacity="0" Focusable="False"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Opacity="0" Focusable="False"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border x:Name="thumbBd" Background="#2E323B" CornerRadius="3"/>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                        <Setter TargetName="thumbBd" Property="Background" Value="#4B5263"/>
+                                                    </Trigger>
+                                                    <Trigger Property="IsDragging" Value="True">
+                                                        <Setter TargetName="thumbBd" Property="Background" Value="__ACCENT__"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="MinWidth" Value="0"/>
+                    <Setter Property="Height" Value="6"/>
+                    <Setter Property="MinHeight" Value="6"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ScrollBar">
+                                <Grid Background="Transparent" Margin="2,1,2,1">
+                                    <Track x:Name="PART_Track" IsDirectionReversed="False">
+                                        <Track.DecreaseRepeatButton>
+                                            <RepeatButton Command="ScrollBar.PageLeftCommand" Opacity="0" Focusable="False"/>
+                                        </Track.DecreaseRepeatButton>
+                                        <Track.IncreaseRepeatButton>
+                                            <RepeatButton Command="ScrollBar.PageRightCommand" Opacity="0" Focusable="False"/>
+                                        </Track.IncreaseRepeatButton>
+                                        <Track.Thumb>
+                                            <Thumb>
+                                                <Thumb.Template>
+                                                    <ControlTemplate TargetType="Thumb">
+                                                        <Border x:Name="thumbBdH" Background="#2E323B" CornerRadius="3"/>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="thumbBdH" Property="Background" Value="#4B5263"/>
+                                                            </Trigger>
+                                                            <Trigger Property="IsDragging" Value="True">
+                                                                <Setter TargetName="thumbBdH" Property="Background" Value="__ACCENT__"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Thumb.Template>
+                                            </Thumb>
+                                        </Track.Thumb>
+                                    </Track>
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
         </Style>
     </Window.Resources>
 
@@ -312,7 +393,7 @@ function Show-Z2AntigravityDialog([string]$Root, $OwnerWin, [string]$AccentHex =
 
                     <TextBlock x:Name="TxtStep3Hint" Grid.Row="3" Text="" FontSize="12" Foreground="#9CA3AF" Margin="0,0,0,6" TextWrapping="Wrap"/>
 
-                    <Border Grid.Row="4" Background="#14161B" BorderBrush="#262A33" BorderThickness="1" CornerRadius="8" Padding="10,8">
+                    <Border Grid.Row="4" Background="#14161B" BorderBrush="#262A33" BorderThickness="1" CornerRadius="8" Padding="10,8" MinHeight="170">
                         <TextBox x:Name="TxtAgLog" IsReadOnly="True" Background="Transparent" BorderThickness="0" Foreground="#CBD5E1" FontFamily="Consolas" FontSize="11.5" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" AcceptsReturn="True" Text="Нажми «Применить патч» или «Проверить статус»."/>
                     </Border>
                 </Grid>

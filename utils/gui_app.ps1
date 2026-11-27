@@ -79,6 +79,11 @@ try {
     }
 } catch {}
 
+$lum = (0.299 * $accR) + (0.587 * $accG) + (0.114 * $accB)
+if ($lum -lt 85) {
+    $accR = 159; $accG = 199; $accB = 184
+}
+
 $AccentHex      = To-Hex $accR $accG $accB
 $hv             = Mix-Color $accR $accG $accB 255 255 255 0.14
 $AccentHoverHex = To-Hex $hv[0] $hv[1] $hv[2]
@@ -215,6 +220,7 @@ $BtnTabArch      = $win.FindName('BtnTabArch')
 $BtnApplyStrat   = $win.FindName('BtnApplyStrat')
 $BtnDeepOpt      = $win.FindName('BtnDeepOpt')
 $BtnStrategyBuilder = $win.FindName('BtnStrategyBuilder')
+$BtnStratBuilder2   = $win.FindName('BtnStratBuilder2')
 $BtnAutoSetup    = $win.FindName('BtnAutoSetup')
 $BtnTgConnect    = $win.FindName('BtnTgConnect')
 $BtnUdpOpt       = $win.FindName('BtnUdpOpt')
@@ -625,7 +631,7 @@ $script:HealthWarnShown   = $false
 function Set-Z2BusyUiState([bool]$IsBusy) {
     $enabled = -not $IsBusy
     $mutControls = @(
-        $BtnAutoSetup, $BtnDeepOpt, $BtnStrategyBuilder, $BtnApplyStrat, $BtnProbeStrat, $BtnSynthStrat, $BtnAddStrat,
+        $BtnAutoSetup, $BtnDeepOpt, $BtnStrategyBuilder, $BtnStratBuilder2, $BtnApplyStrat, $BtnProbeStrat, $BtnSynthStrat, $BtnAddStrat,
         $BtnTgConnect, $BtnTgToggle, $BtnUdpOpt, $CmbUdpFake, $CmbQuickStrat, $CmbTgMode,
         $CmbIpsetMode, $BtnDiag, $BtnUpdateLists, $BtnCheckUpdate, $BtnUninstall,
         $ChkAutoHost, $ChkWarp, $ChkGameFilter, $ChkKernelFilter, $ChkNlmVpn, $BtnNlmConfig,
@@ -2029,7 +2035,8 @@ $BtnProbeStrat.Add_Click({
 
 $BtnAutoSetup.Add_Click({ Run-ConsoleTool 'utils\auto_setup.ps1' '-NonInteractive' $false 'Автонастройка' $BtnAutoSetup })
 $BtnDeepOpt.Add_Click({ Run-ConsoleTool 'utils\deep_optimize.ps1' '-NonInteractive' $false 'Глубокий тест (22 стратегии)' $BtnDeepOpt })
-$BtnStrategyBuilder.Add_Click({ Run-ConsoleTool 'utils\strategy_builder.ps1' '-NonInteractive' $false 'Конструктор стратегии (5 мин)' $BtnStrategyBuilder })
+$BtnStrategyBuilder.Add_Click({ Run-ConsoleTool 'utils\strategy_builder.ps1' '-NonInteractive' $false 'Сборка стратегии с нуля' $BtnStrategyBuilder })
+$BtnStratBuilder2.Add_Click({ Run-ConsoleTool 'utils\strategy_builder.ps1' '-NonInteractive' $false 'Сборка стратегии с нуля' $BtnStratBuilder2 })
 $BtnUdpOpt.Add_Click({ Run-ConsoleTool 'utils\fake_selector.ps1' '-Action auto' $false 'Подбор UDP-фейка' $BtnUdpOpt })
 if ($null -ne $ChkUdpManual) {
     $ChkUdpManual.Add_Click({
